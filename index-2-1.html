@@ -1,0 +1,1894 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>DATA LUMEN · Data Volume Monitor v7</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/osmtogeojson@3.0.0-beta.5/osmtogeojson.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&display=swap');
+
+  :root {
+    --bg: #050a0f;
+    --panel: #080f18;
+    --border: #0d2235;
+    --cell: #00f5ff;
+    --wifi: #00ff88;
+    --iot: #ff6b35;
+    --trf: #a855f7;
+    --pub: #f59e0b;
+    --acc: #ffe600;
+    --glow-cell: 0 0 12px #00f5ff88;
+    --glow-wifi: 0 0 12px #00ff8888;
+    --glow-iot: 0 0 12px #ff6b3588;
+    --glow-trf: 0 0 12px #a855f788;
+    --glow-pub: 0 0 12px #f59e0b88;
+    --delta-up: #00ff88;
+    --delta-down: #ff4444;
+    --delta-flat: #446688;
+    --inf: #ff2d9b;
+    --glow-inf: 0 0 12px #ff2d9b88;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    background: var(--bg);
+    font-family: 'Share Tech Mono', monospace;
+    color: #a0cce0;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content:'';
+    position:fixed;
+    inset:0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,245,255,0.012) 2px, rgba(0,245,255,0.012) 4px);
+    pointer-events:none;
+    z-index:999;
+  }
+
+  /* ── CAPTURE BTN ── */
+  .capture-btn-wrap { position:sticky; top:0; z-index:200; width:100%; }
+  .capture-btn {
+    width:100%; padding:14px 0;
+    font-family:'Orbitron',monospace; font-size:15px; font-weight:900; letter-spacing:5px;
+    border:none; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; gap:12px;
+    transition:all 0.3s; position:relative; overflow:hidden;
+  }
+  .capture-btn.capturing {
+    background:linear-gradient(135deg,#001a2e,#002a1a);
+    color:#00ff88; box-shadow:0 4px 30px rgba(0,255,136,0.4);
+    border-bottom:2px solid #00ff88;
+  }
+  .capture-btn.stopped {
+    background:linear-gradient(135deg,#0a0a0a,#111);
+    color:#333; border-bottom:2px solid #1a1a1a;
+  }
+  .capture-btn.capturing::before {
+    content:''; position:absolute; inset:0;
+    background:linear-gradient(90deg,transparent,rgba(0,255,136,0.08),transparent);
+    animation:capSweep 2s linear infinite;
+  }
+  @keyframes capSweep { 0%{transform:translateX(-100%)} 100%{transform:translateX(100%)} }
+  .capture-pulse { width:12px; height:12px; border-radius:50%; flex-shrink:0; }
+  .capturing .capture-pulse { background:#00ff88; animation:capPulse 1s ease-out infinite; }
+  .stopped .capture-pulse { background:#222; }
+  @keyframes capPulse {
+    0%{box-shadow:0 0 0 0 rgba(0,255,136,0.7)}
+    70%{box-shadow:0 0 0 10px rgba(0,255,136,0)}
+    100%{box-shadow:0 0 0 0 rgba(0,255,136,0)}
+  }
+
+  .app { max-width:480px; margin:0 auto; padding:10px; display:flex; flex-direction:column; gap:8px; }
+
+  /* ── HEADER ── */
+  header {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:10px 14px;
+    background:var(--panel); border:1px solid var(--border); border-top:2px solid var(--cell);
+    position:relative; overflow:hidden;
+  }
+  header::after {
+    content:''; position:absolute; bottom:0; left:0; right:0; height:1px;
+    background:linear-gradient(90deg,transparent,var(--cell),transparent);
+    animation:sweep 3s linear infinite;
+  }
+  @keyframes sweep { 0%{transform:translateX(-100%)} 100%{transform:translateX(100%)} }
+  .logo { font-family:'Orbitron',monospace; font-size:20px; font-weight:900; letter-spacing:4px; color:var(--cell); text-shadow:var(--glow-cell); }
+  .logo span { color:#fff; opacity:0.4; font-size:9px; display:block; letter-spacing:7px; margin-top:2px; }
+  .master-btn {
+    display:flex; align-items:center; gap:6px;
+    background:none; border:1px solid var(--cell); color:var(--cell);
+    font-family:'Orbitron',monospace; font-size:10px; font-weight:700; letter-spacing:2px;
+    padding:7px 12px; cursor:pointer; transition:all 0.2s;
+  }
+  .master-btn:hover { background:rgba(0,245,255,0.1); }
+  .master-btn.off { border-color:#333; color:#333; }
+  .power-dot { width:7px; height:7px; border-radius:50%; background:var(--cell); box-shadow:var(--glow-cell); animation:blink 1.2s ease-in-out infinite; }
+  .master-btn.off .power-dot { background:#333; box-shadow:none; animation:none; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+  /* ── STATUS ── */
+  .status-bar {
+    display:flex; gap:8px; background:var(--panel); border:1px solid var(--border);
+    padding:8px 12px; font-size:10px; align-items:center; flex-wrap:wrap;
+  }
+  .status-item { display:flex; align-items:center; gap:4px; }
+  .status-label { color:#456; }
+  .status-val { color:var(--acc); }
+  .sep { color:#1a3a52; }
+  .refresh-ring { width:30px; height:30px; border-radius:50%; border:2px solid #0d2235; border-top-color:var(--acc); flex-shrink:0; position:relative; }
+  .refresh-ring.spinning { animation:spin 5s linear; }
+  @keyframes spin { to{transform:rotate(360deg)} }
+  .refresh-pct { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:7px; color:var(--acc); }
+
+  /* ── BOTONERA CONTROL — v7: 6 botones, 3 col ── */
+  .control-panel {
+    background:var(--panel); border:1px solid var(--border); border-top:2px solid var(--acc);
+    padding:10px 12px;
+  }
+  .control-title {
+    font-family:'Orbitron',monospace; font-size:9px; font-weight:700;
+    color:var(--acc); letter-spacing:3px; margin-bottom:8px;
+  }
+  .control-grid {
+    display:grid; grid-template-columns: repeat(3, 1fr); gap:6px;
+  }
+  .ctrl-btn {
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:3px; padding:10px 4px;
+    background:#050d14; border:1px solid #1a3a52;
+    cursor:pointer; transition:all 0.2s; position:relative;
+  }
+  .ctrl-btn.active {
+    border-color:var(--wifi); box-shadow:0 0 8px rgba(0,255,136,0.3);
+    background:#001a0f;
+  }
+  .ctrl-btn.warning {
+    border-color:#ff2200; box-shadow:0 0 8px rgba(255,34,0,0.4);
+    animation:warnPulse 1.5s ease-in-out infinite;
+  }
+  @keyframes warnPulse {
+    0%,100%{border-color:#ff2200;} 50%{border-color:#ff6600;}
+  }
+  .ctrl-btn .cb-icon { font-size:20px; line-height:1; }
+  .ctrl-btn .cb-label {
+    font-family:'Orbitron',monospace; font-size:7px; font-weight:700;
+    letter-spacing:1px; text-align:center; color:#456;
+  }
+  .ctrl-btn.active .cb-label { color:var(--wifi); }
+  .ctrl-btn.warning .cb-label { color:#ff4400; }
+  .ctrl-dot {
+    position:absolute; top:4px; right:4px;
+    width:5px; height:5px; border-radius:50%;
+    background:#1a3a52;
+  }
+  .ctrl-btn.active .ctrl-dot { background:var(--wifi); box-shadow:0 0 4px var(--wifi); }
+  .ctrl-btn.warning .ctrl-dot { background:#ff2200; box-shadow:0 0 4px #ff2200; animation:blink 0.8s infinite; }
+
+  /* ── LOCATION ── */
+  .location-panel {
+    display:flex; align-items:center; gap:10px;
+    background:var(--panel); border:1px solid var(--border);
+    padding:8px 12px;
+  }
+  .loc-icon { font-size:20px; flex-shrink:0; }
+  .loc-name { font-family:'Orbitron',monospace; font-size:10px; font-weight:700; color:var(--cell); letter-spacing:2px; }
+  .loc-sub { font-size:8px; color:#456; letter-spacing:1px; margin-top:2px; }
+  .loc-btn {
+    margin-left:auto; background:none; border:1px solid var(--cell); color:var(--cell);
+    font-family:'Share Tech Mono',monospace; font-size:9px; padding:5px 10px; cursor:pointer;
+    letter-spacing:1px; white-space:nowrap; transition:all 0.2s; flex-shrink:0;
+  }
+  .loc-btn:hover { background:rgba(0,245,255,0.1); }
+
+  /* ── SPLIT SCREEN ── */
+  .split-screen { display:flex; flex-direction:column; gap:8px; }
+
+  /* ── PANEL BARRAS ── */
+  .bars-panel {
+    background:var(--panel); border:1px solid var(--border); border-top:2px solid var(--cell);
+    padding:10px 12px; display:flex; flex-direction:column; gap:6px;
+  }
+  .bars-panel-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; }
+  .bars-title { font-family:'Orbitron',monospace; font-size:9px; font-weight:700; color:var(--cell); letter-spacing:3px; }
+  .download-bars-btn {
+    background:none; border:1px solid #1a3a52; color:#456;
+    font-family:'Share Tech Mono',monospace; font-size:8px; padding:3px 8px; cursor:pointer;
+    letter-spacing:1px; transition:all 0.2s;
+  }
+  .download-bars-btn:hover { border-color:var(--cell); color:var(--cell); }
+
+  .hbar-row {
+    display:flex; align-items:center; gap:8px; padding:5px 0;
+    border-bottom:1px solid #0a1a28;
+  }
+  .hbar-label { font-size:9px; font-weight:700; letter-spacing:1px; }
+  .hbar-sub { font-size:7px; color:#2a5570; letter-spacing:0.5px; margin-top:1px; }
+  .hbar-cell .hbar-label { color:var(--cell); }
+  .hbar-wifi .hbar-label { color:var(--wifi); }
+  .hbar-iot  .hbar-label { color:var(--iot); }
+  .hbar-trf  .hbar-label { color:var(--trf); }
+  .hbar-pub  .hbar-label { color:var(--pub); }
+  .hbar-inf  .hbar-label { color:var(--inf); }
+
+  .hbar-track { flex:1; height:6px; background:#0a1a28; position:relative; }
+  .hbar-fill { height:100%; transition:width 0.5s ease; }
+  .hbar-cell .hbar-fill { background:linear-gradient(90deg,#004466,var(--cell)); }
+  .hbar-wifi .hbar-fill { background:linear-gradient(90deg,#004422,var(--wifi)); }
+  .hbar-iot  .hbar-fill { background:linear-gradient(90deg,#441100,var(--iot)); }
+  .hbar-trf  .hbar-fill { background:linear-gradient(90deg,#220044,var(--trf)); }
+  .hbar-pub  .hbar-fill { background:linear-gradient(90deg,#443300,var(--pub)); }
+  .hbar-inf  .hbar-fill { background:linear-gradient(90deg,#440033,var(--inf)); }
+
+  .hbar-val {
+    font-family:'Orbitron',monospace; font-size:10px; font-weight:700;
+    min-width:32px; text-align:right;
+  }
+  .hbar-cell .hbar-val { color:var(--cell); }
+  .hbar-wifi .hbar-val { color:var(--wifi); }
+  .hbar-iot  .hbar-val { color:var(--iot); }
+  .hbar-trf  .hbar-val { color:var(--trf); }
+  .hbar-pub  .hbar-val { color:var(--pub); }
+  .hbar-inf  .hbar-val { color:var(--inf); }
+
+  /* ── DELTA INDICADOR ── */
+  .hbar-delta {
+    font-size:9px; font-weight:700; min-width:20px; text-align:center;
+    transition:color 0.3s;
+  }
+  .delta-up   { color:var(--delta-up); }
+  .delta-down { color:var(--delta-down); }
+  .delta-flat { color:var(--delta-flat); }
+
+  /* ── TOTAL Y SILENCIO ── */
+  .total-row { display:flex; align-items:center; gap:8px; padding:6px 0; border-top:1px solid #1a3a52; margin-top:2px; }
+  .total-label { font-size:8px; color:#446688; letter-spacing:2px; flex:0 0 90px; }
+  .total-track { flex:1; height:4px; background:#0a1a28; }
+  .total-fill { height:100%; background:linear-gradient(90deg,#1a3a52,#446688); transition:width 0.5s; }
+  .total-val { font-family:'Orbitron',monospace; font-size:10px; font-weight:700; color:#446688; min-width:32px; text-align:right; }
+
+  .silencio-row { display:flex; align-items:center; gap:8px; padding:4px 0; }
+  .silencio-icon { font-size:14px; }
+  .silencio-label { font-size:8px; color:#2a5570; letter-spacing:2px; flex:0 0 70px; }
+  .silencio-track { flex:1; height:4px; background:#0a1a28; }
+  .silencio-fill { height:100%; background:linear-gradient(90deg,#0a1a28,#1a3a52); transition:width 0.5s; }
+  .silencio-val { font-family:'Orbitron',monospace; font-size:10px; color:#1a5a72; min-width:24px; text-align:right; }
+  .silencio-pct { font-size:8px; color:#1a5a72; }
+
+  .enacom-row { display:flex; align-items:center; gap:8px; padding:4px 0; border-top:1px solid #0a1a28; margin-top:2px; }
+  .enacom-icon { font-size:14px; }
+  .enacom-label { font-size:7px; color:#2a5570; letter-spacing:1px; flex:0 0 50px; line-height:1.3; }
+  .enacom-track { flex:1; height:4px; background:#0a1a28; }
+  .enacom-fill { height:100%; background:linear-gradient(90deg,#1a3a62,#3a6aaa); transition:width 0.8s; }
+  .enacom-val { font-family:'Orbitron',monospace; font-size:10px; color:#3a6aaa; min-width:36px; text-align:right; }
+  .enacom-beta { font-size:6px; color:#f59e0b; border:1px solid #f59e0b; padding:1px 3px; letter-spacing:1px; flex-shrink:0; }
+  .enacom-map-btn {
+    width:100%; background:none; border:1px solid #1a3a52; color:#2a5570;
+    font-family:'Share Tech Mono',monospace; font-size:8px; padding:6px; cursor:pointer;
+    letter-spacing:1px; text-align:left; transition:all 0.2s; margin-top:4px;
+  }
+  .enacom-map-btn:hover { border-color:#3a6aaa; color:#3a6aaa; }
+
+  /* ── CONTEXTO URBANO (NUEVO v7) ── */
+  .contexto-panel {
+    background:var(--panel); border:1px solid var(--border); border-top:2px solid var(--iot);
+    padding:7px 10px;
+  }
+  .contexto-title {
+    font-family:'Orbitron',monospace; font-size:8px; font-weight:700;
+    color:var(--iot); letter-spacing:3px; margin-bottom:6px;
+  }
+  .contexto-grid {
+    display:grid; grid-template-columns:repeat(5, 1fr); gap:4px;
+  }
+  .ctx-chip {
+    display:flex; align-items:center; justify-content:center; gap:2px;
+    padding:5px 2px; border:1px solid #1a3a52; cursor:pointer;
+    transition:all 0.2s; flex-direction:column; background:#050d14;
+  }
+  .ctx-chip .ctx-icon { font-size:13px; }
+  .ctx-chip .ctx-label { font-size:5px; color:#456; letter-spacing:0.5px; text-align:center; font-family:'Orbitron',monospace; line-height:1.1; }
+  .ctx-chip.selected {
+    border-color:var(--iot); background:rgba(255,107,53,0.12);
+    box-shadow:0 0 6px rgba(255,107,53,0.2);
+  }
+  .ctx-chip.selected .ctx-label { color:var(--iot); }
+  .ctx-actual {
+    margin-top:5px; font-size:7px; color:#2a5570; letter-spacing:1px;
+    padding:3px 6px; border:1px solid #0a1a28; background:#050a0f;
+  }
+  .ctx-actual span { color:var(--iot); }
+
+  /* ── CURVA DE BRUMA — franja fina ── */
+  .bruma-panel {
+    background:var(--panel); border:1px solid var(--border); border-top:2px solid var(--trf);
+    padding:6px 12px 4px 12px;
+  }
+  .bruma-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:3px; }
+  .bruma-title { font-family:'Orbitron',monospace; font-size:8px; font-weight:700; color:var(--trf); letter-spacing:3px; }
+  .bruma-timer { font-size:7px; color:#456; letter-spacing:1px; }
+  #brumaCanvas { width:100%; display:block; }
+  .bruma-sub { font-size:6px; color:#1a3a52; letter-spacing:1px; margin-top:2px; text-align:center; }
+
+  /* ── MAPA ── */
+  .map-panel {
+    background:var(--panel); border:1px solid var(--border); border-top:2px solid var(--trf);
+    padding:10px 12px;
+  }
+  .map-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+  .map-title { font-family:'Orbitron',monospace; font-size:9px; font-weight:700; color:var(--trf); letter-spacing:3px; }
+  .map-actions { display:flex; gap:4px; flex-wrap:wrap; }
+  .map-btn {
+    background:none; border:1px solid #1a3a52; color:#456;
+    font-family:'Share Tech Mono',monospace; font-size:8px; padding:4px 7px; cursor:pointer;
+    letter-spacing:1px; transition:all 0.2s; white-space:nowrap;
+  }
+  .map-btn:hover { border-color:var(--trf); color:var(--trf); }
+  .map-btn.active { border-color:var(--trf); color:var(--trf); background:rgba(168,85,247,0.1); }
+  #mapCanvas { width:100%; height:180px; display:block; border:1px solid #0a1a28; }
+  #leafletMap { width:100%; height:180px; display:none; border:1px solid #0a1a28; }
+  .map-coords {
+    display:grid; grid-template-columns:repeat(4,1fr); gap:4px; margin-top:6px;
+  }
+  .coord-item { display:flex; flex-direction:column; gap:1px; }
+  .coord-label { font-size:6px; color:#2a5570; letter-spacing:1px; }
+  .coord-val { font-family:'Orbitron',monospace; font-size:8px; color:var(--cell); }
+  .map-legend { display:flex; gap:10px; margin-top:6px; flex-wrap:wrap; }
+  .leg-item { display:flex; align-items:center; gap:4px; font-size:7px; color:#456; letter-spacing:1px; }
+  .leg-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+
+  /* ── COMPARACIÓN TEMPORAL (NUEVO v7) ── */
+  .compare-panel {
+    background:var(--panel); border:1px solid var(--border); border-top:2px solid var(--pub);
+    padding:10px 12px;
+  }
+  .compare-title {
+    font-family:'Orbitron',monospace; font-size:9px; font-weight:700;
+    color:var(--pub); letter-spacing:3px; margin-bottom:8px;
+  }
+  .compare-tabs {
+    display:flex; gap:4px; margin-bottom:8px; flex-wrap:wrap;
+  }
+  .compare-tab {
+    background:none; border:1px solid #1a3a52; color:#456;
+    font-family:'Share Tech Mono',monospace; font-size:8px; padding:4px 8px;
+    cursor:pointer; letter-spacing:1px; transition:all 0.2s;
+  }
+  .compare-tab.active { border-color:var(--pub); color:var(--pub); background:rgba(245,158,11,0.08); }
+  .compare-chart { min-height:60px; display:flex; align-items:flex-end; gap:3px; padding:4px 0; }
+  .cmp-bar-wrap { flex:1; display:flex; flex-direction:column; align-items:center; gap:2px; }
+  .cmp-bar { width:100%; min-height:2px; transition:height 0.4s ease; border-radius:1px 1px 0 0; }
+  .cmp-label { font-size:6px; color:#2a5570; letter-spacing:1px; text-align:center; }
+  .cmp-val { font-size:7px; color:var(--pub); font-family:'Orbitron',monospace; text-align:center; }
+  .compare-empty { font-size:8px; color:#1a3a52; letter-spacing:2px; padding:16px 0; text-align:center; width:100%; }
+  .compare-save-btn {
+    width:100%; margin-top:6px; background:none; border:1px solid var(--pub); color:var(--pub);
+    font-family:'Share Tech Mono',monospace; font-size:8px; padding:6px; cursor:pointer;
+    letter-spacing:2px; transition:all 0.2s;
+  }
+  .compare-save-btn:hover { background:rgba(245,158,11,0.1); }
+
+  /* ── HISTORIAL ── */
+  .history {
+    background:var(--panel); border:1px solid var(--border);
+    padding:8px 12px;
+  }
+  .hist-title { font-family:'Orbitron',monospace; font-size:8px; color:#446688; letter-spacing:3px; margin-bottom:6px; }
+  .hist-chart { display:flex; align-items:flex-end; gap:3px; height:50px; }
+  .hist-bar-wrap { flex:1; display:flex; flex-direction:column; align-items:center; gap:2px; }
+  .hist-bar { width:100%; background:linear-gradient(180deg,#1a4a6a,#0a2a3a); min-height:2px; transition:height 0.3s; border-radius:1px 1px 0 0; }
+  .hist-bar.current { background:linear-gradient(180deg,var(--cell),#004466); box-shadow:0 0 6px var(--cell); }
+  .hist-label { font-size:5px; color:#1a3a52; letter-spacing:0.5px; }
+
+  /* ── TABLA GEO ── */
+  .geo-table-panel {
+    background:var(--panel); border:1px solid var(--border);
+    padding:8px 12px;
+  }
+  .geo-table-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+  .geo-table-title { font-family:'Orbitron',monospace; font-size:8px; color:#446688; letter-spacing:3px; }
+  .export-csv-btn {
+    background:none; border:1px solid #1a3a52; color:#446688;
+    font-family:'Share Tech Mono',monospace; font-size:8px; padding:3px 8px; cursor:pointer;
+    letter-spacing:1px; transition:all 0.2s;
+  }
+  .export-csv-btn:hover { border-color:#446688; }
+  .geo-row {
+    display:grid; grid-template-columns:40px 60px 1fr 1fr 1fr 1fr 1fr;
+    gap:4px; padding:4px 0; border-bottom:1px solid #0a1a28; align-items:center;
+    font-size:8px;
+  }
+  .geo-row.header { color:#2a5570; letter-spacing:1px; }
+  .geo-row.data { color:#4a7a90; }
+  .geo-row.data:last-child { border-bottom:none; }
+  .geo-ts { color:#456; }
+  .geo-coords { font-size:7px; color:#2a5570; }
+  .geo-val-c { color:var(--cell); font-family:'Orbitron',monospace; font-size:9px; text-align:center; }
+  .geo-val-w { color:var(--wifi); font-family:'Orbitron',monospace; font-size:9px; text-align:center; }
+  .geo-val-i { color:var(--iot);  font-family:'Orbitron',monospace; font-size:9px; text-align:center; }
+  .geo-val-t { color:var(--trf);  font-family:'Orbitron',monospace; font-size:9px; text-align:center; }
+  .geo-val-p { color:var(--pub);  font-family:'Orbitron',monospace; font-size:9px; text-align:center; }
+
+  /* ── ALERTAS SAT ── */
+  #satContainer { position:fixed; top:70px; left:0; right:0; z-index:998; display:flex; flex-direction:column; pointer-events:none; }
+  .sat-card { margin:6px; border:2px solid #ff2200; background:#0a0500; padding:12px 14px; display:flex; align-items:center; gap:10px; box-shadow:0 0 30px rgba(255,34,0,0.5); animation:satSlide 0.3s ease-out; pointer-events:all; }
+  @keyframes satSlide { from{transform:translateY(-100%);opacity:0} to{transform:translateY(0);opacity:1} }
+  .sat-icon { font-size:24px; flex-shrink:0; }
+  .sat-body { flex:1; }
+  .sat-title { font-family:'Orbitron',monospace; font-size:11px; font-weight:900; color:#ff2200; letter-spacing:2px; animation:satBlink 0.6s ease-in-out infinite alternate; }
+  @keyframes satBlink { from{opacity:1} to{opacity:0.4} }
+  .sat-msg { font-size:10px; color:#ff6644; margin-top:3px; letter-spacing:1px; }
+  .sat-close { background:none; border:1px solid #ff2200; color:#ff2200; font-family:'Share Tech Mono',monospace; font-size:10px; padding:5px 10px; cursor:pointer; letter-spacing:1px; }
+
+  /* ── ALERTA PROACTIVA ── */
+  .proactive-alert {
+    position:fixed; bottom:80px; left:12px; right:12px; z-index:9998;
+    background:#0a0e14; border:2px solid var(--acc);
+    padding:14px 16px; display:flex; align-items:center; gap:12px;
+    box-shadow:0 0 25px rgba(255,230,0,0.3);
+    animation:alertSlideUp 0.4s ease-out;
+  }
+  @keyframes alertSlideUp { from{transform:translateY(80px);opacity:0} to{transform:translateY(0);opacity:1} }
+  .proactive-alert .pa-icon { font-size:26px; flex-shrink:0; }
+  .proactive-alert .pa-body { flex:1; }
+  .proactive-alert .pa-title { font-family:'Orbitron',monospace; font-size:10px; font-weight:900; color:var(--acc); letter-spacing:2px; }
+  .proactive-alert .pa-msg { font-size:9px; color:#a0cce0; margin-top:3px; letter-spacing:1px; line-height:1.4; }
+  .proactive-alert .pa-close { background:none; border:1px solid var(--acc); color:var(--acc); font-family:'Share Tech Mono',monospace; font-size:10px; padding:5px 10px; cursor:pointer; }
+  .proactive-alert.urgent { border-color:#ff2200; box-shadow:0 0 25px rgba(255,34,0,0.4); animation:alertSlideUp 0.4s ease-out, urgentBorder 1s ease-in-out infinite; }
+  @keyframes urgentBorder { 0%,100%{border-color:#ff2200;} 50%{border-color:#ff6600;} }
+  .proactive-alert.urgent .pa-title { color:#ff4400; }
+  .proactive-alert.urgent .pa-close { border-color:#ff2200; color:#ff2200; }
+
+  /* ── GPS EMERGENCIA ── */
+  .gps-emergency-wrap { display:flex; justify-content:center; align-items:center; padding:10px 14px 4px 14px; }
+  .gps-emergency-btn {
+    position:relative; width:72px; height:72px; border-radius:50%;
+    background:radial-gradient(circle at 35% 35%, #ff4444, #cc0000, #880000);
+    border:3px solid #ff2200;
+    box-shadow:0 0 0 4px rgba(255,34,0,0.2), 0 0 30px rgba(255,34,0,0.5), 0 4px 20px rgba(0,0,0,0.6);
+    cursor:pointer; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+    transition:all 0.2s; overflow:hidden;
+  }
+  .gps-emergency-btn::before { content:''; position:absolute; inset:0; border-radius:50%; background:linear-gradient(135deg,rgba(255,255,255,0.15),transparent 60%); pointer-events:none; }
+  .gps-emergency-btn.active {
+    background:radial-gradient(circle at 35% 35%, #00ff88, #00cc66, #008844);
+    border-color:#00ff88;
+    box-shadow:0 0 0 4px rgba(0,255,136,0.2), 0 0 30px rgba(0,255,136,0.5), 0 4px 20px rgba(0,0,0,0.6);
+    animation:gpsGreenPulse 2s ease-in-out infinite;
+  }
+  @keyframes gpsGreenPulse {
+    0%,100%{box-shadow:0 0 0 4px rgba(0,255,136,0.2), 0 0 30px rgba(0,255,136,0.5)}
+    50%{box-shadow:0 0 0 10px rgba(0,255,136,0.05), 0 0 50px rgba(0,255,136,0.7)}
+  }
+  .gps-emergency-btn:not(.active) { animation:gpsRedPulse 1.8s ease-in-out infinite; }
+  @keyframes gpsRedPulse {
+    0%,100%{box-shadow:0 0 0 4px rgba(255,34,0,0.2), 0 0 30px rgba(255,34,0,0.5)}
+    50%{box-shadow:0 0 0 12px rgba(255,34,0,0.05), 0 0 50px rgba(255,34,0,0.7)}
+  }
+  .gps-btn-icon { font-size:22px; line-height:1; }
+  .gps-btn-label { font-family:'Orbitron',monospace; font-size:6px; font-weight:900; letter-spacing:1px; color:#fff; text-shadow:0 1px 3px rgba(0,0,0,0.8); text-align:center; line-height:1.1; }
+  .gps-emergency-ring { position:absolute; inset:-4px; border-radius:50%; border:2px solid rgba(255,34,0,0.4); animation:ringExpand 2s ease-out infinite; }
+  .gps-emergency-btn.active .gps-emergency-ring { border-color:rgba(0,255,136,0.4); }
+  @keyframes ringExpand { 0%{transform:scale(1);opacity:0.8} 100%{transform:scale(1.4);opacity:0} }
+  .gps-emergency-ring2 { position:absolute; inset:-4px; border-radius:50%; border:2px solid rgba(255,34,0,0.3); animation:ringExpand 2s ease-out 0.8s infinite; }
+  .gps-emergency-btn.active .gps-emergency-ring2 { border-color:rgba(0,255,136,0.3); }
+  .gps-side-label { display:flex; flex-direction:column; gap:2px; margin-left:14px; }
+  .gps-side-title { font-family:'Orbitron',monospace; font-size:9px; font-weight:900; color:#ff2200; letter-spacing:2px; }
+  .gps-side-title.active { color:#00ff88; }
+  .gps-side-sub { font-size:8px; color:#456; letter-spacing:1px; max-width:160px; line-height:1.4; }
+  .gps-maps-btn { margin-top:6px; background:none; border:1px solid #00ff88; color:#00ff88; font-family:'Share Tech Mono',monospace; font-size:8px; padding:4px 10px; cursor:pointer; letter-spacing:1px; display:none; align-items:center; gap:4px; transition:all 0.2s; }
+  .gps-maps-btn.visible { display:flex; }
+  .gps-maps-btn:hover { background:rgba(0,255,136,0.1); }
+
+  /* ── FOOTER ── */
+  footer { text-align:center; font-size:8px; color:#1a3a52; letter-spacing:2px; padding:8px; }
+  .footer-author { font-size:8px; color:#2a4a62; letter-spacing:1px; margin-top:3px; }
+  .countdown { color:var(--acc); }
+
+  /* ── CAPAS TEMÁTICAS ── */
+  .capas-panel {
+    background:var(--panel); border:1px solid var(--border); border-top:2px solid #00ff88;
+    padding:10px 12px; margin-top:6px; display:none;
+  }
+  .capas-panel.visible { display:block; }
+  .capas-title { font-family:'Orbitron',monospace; font-size:9px; font-weight:700; color:#00ff88; letter-spacing:3px; margin-bottom:8px; }
+  .capas-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:6px; }
+  .capa-btn {
+    display:flex; align-items:center; gap:6px; padding:8px 10px;
+    background:#050d14; border:1px solid #1a3a52; cursor:pointer; transition:all 0.2s;
+    font-family:'Share Tech Mono',monospace; font-size:9px; color:#456; letter-spacing:1px;
+  }
+  .capa-btn.on { border-color:var(--wifi); color:var(--wifi); background:#001a0f; box-shadow:0 0 6px rgba(0,255,136,0.2); }
+  .capa-btn.on.verde { border-color:#4ade80; color:#4ade80; background:#001a0a; box-shadow:0 0 6px rgba(74,222,128,0.2); }
+  .capa-btn.on.agua  { border-color:#38bdf8; color:#38bdf8; background:#001020; box-shadow:0 0 6px rgba(56,189,248,0.2); }
+  .capa-btn.on.via   { border-color:#fb923c; color:#fb923c; background:#120800; box-shadow:0 0 6px rgba(251,146,60,0.2); }
+  .capa-btn.on.trama { border-color:#c084fc; color:#c084fc; background:#0e0520; box-shadow:0 0 6px rgba(192,132,252,0.2); }
+  .capa-btn.on.instit { border-color:#facc15; color:#facc15; background:#12100a; box-shadow:0 0 6px rgba(250,204,21,0.2); }
+  .capa-dot { width:7px; height:7px; border-radius:50%; background:#1a3a52; flex-shrink:0; }
+  .capa-btn.on.verde .capa-dot { background:#4ade80; box-shadow:0 0 4px #4ade80; }
+  .capa-btn.on.agua  .capa-dot { background:#38bdf8; box-shadow:0 0 4px #38bdf8; }
+  .capa-btn.on.via   .capa-dot { background:#fb923c; box-shadow:0 0 4px #fb923c; }
+  .capa-btn.on.trama .capa-dot { background:#c084fc; box-shadow:0 0 4px #c084fc; }
+  .capa-btn.on.instit .capa-dot { background:#facc15; box-shadow:0 0 4px #facc15; }
+  .capas-note { font-size:7px; color:#1a3a52; letter-spacing:1px; margin-top:6px; line-height:1.4; }
+</style>
+</head>
+<body>
+
+<div id="satContainer"></div>
+
+<div class="capture-btn-wrap">
+  <button class="capture-btn capturing" id="captureBtn" onclick="toggleCapture()">
+    <div class="capture-pulse"></div>
+    <span id="captureBtnLabel">■ DETENER CAPTURA</span>
+  </button>
+</div>
+
+<div class="app">
+
+  <!-- HEADER -->
+  <header>
+    <div>
+      <div class="logo">DATA LUMEN<span>DATA VOLUME MONITOR v7</span></div>
+    </div>
+    <button class="master-btn" id="masterBtn" onclick="toggleMaster()">
+      <div class="power-dot" id="powerDot"></div>
+      <span id="masterLabel">ON</span>
+    </button>
+  </header>
+
+  <!-- STATUS -->
+  <div class="status-bar">
+    <div class="status-item"><span class="status-label">ESTADO</span>&nbsp;<span class="status-val" id="statusVal">ACTIVO</span></div>
+    <span class="sep">|</span>
+    <div class="status-item"><span class="status-label">CICLO</span>&nbsp;<span class="status-val" id="cycleCount">0</span></div>
+    <span class="sep">|</span>
+    <div class="status-item"><span class="status-label">PRÓX.</span>&nbsp;<span class="status-val countdown" id="countdown">15:00</span></div>
+    <div style="margin-left:auto;position:relative">
+      <div class="refresh-ring" id="refreshRing">
+        <div class="refresh-pct" id="refreshPct">0%</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BOTONERA DE CONTROL — v7: 6 botones, sin RECORRIDO ni EMAIL -->
+  <div class="control-panel">
+    <div class="control-title">◈ CONTROLES RÁPIDOS</div>
+    <div class="control-grid">
+      <button class="ctrl-btn" id="ctrlGps" onclick="activarGPSyMaps()">
+        <div class="ctrl-dot"></div>
+        <div class="cb-icon">📍</div>
+        <div class="cb-label">GPS</div>
+      </button>
+      <button class="ctrl-btn" id="ctrlCaptura" onclick="toggleCapture()" style="border-color:#00ff88;background:#001a0f;">
+        <div class="ctrl-dot" style="background:#00ff88;box-shadow:0 0 4px #00ff88;"></div>
+        <div class="cb-icon">⏺</div>
+        <div class="cb-label" style="color:#00ff88;">CAPTURA</div>
+      </button>
+      <button class="ctrl-btn" id="ctrlMapa" onclick="toggleControlMapa()">
+        <div class="ctrl-dot"></div>
+        <div class="cb-icon">🗺</div>
+        <div class="cb-label">MAPA</div>
+      </button>
+      <button class="ctrl-btn" id="ctrlBruma" onclick="toggleBruma()" style="border-color:#a855f7;background:#0e0520;">
+        <div class="ctrl-dot" style="background:#a855f7;box-shadow:0 0 4px #a855f7;"></div>
+        <div class="cb-icon">🌫</div>
+        <div class="cb-label" style="color:#a855f7;">BRUMA</div>
+      </button>
+      <button class="ctrl-btn" id="ctrlCSV" onclick="exportCSV()">
+        <div class="ctrl-dot"></div>
+        <div class="cb-icon">📊</div>
+        <div class="cb-label">CSV</div>
+      </button>
+      <button class="ctrl-btn" id="ctrlPDF" onclick="generatePDF()">
+        <div class="ctrl-dot"></div>
+        <div class="cb-icon">📄</div>
+        <div class="cb-label">PDF</div>
+      </button>
+    </div>
+  </div>
+
+  <!-- GPS EMERGENCIA -->
+  <div class="gps-emergency-wrap">
+    <button class="gps-emergency-btn" id="gpsEmergencyBtn" onclick="activarGPSyMaps()">
+      <div class="gps-emergency-ring"></div>
+      <div class="gps-emergency-ring2"></div>
+      <div class="gps-btn-icon" id="gpsBtnIcon">📍</div>
+      <div class="gps-btn-label" id="gpsBtnLabel">ACTIVAR<br>GPS</div>
+    </button>
+    <div class="gps-side-label">
+      <div class="gps-side-title" id="gpsSideTitle">⚠ GPS REQUERIDO</div>
+      <div class="gps-side-sub" id="gpsSideSub">Tocá el botón rojo para activar ubicación</div>
+      <button class="gps-maps-btn" id="gpsMapsBtn" onclick="abrirMapsDirecto()">🗺 ABRIR GOOGLE MAPS</button>
+    </div>
+  </div>
+
+  <!-- LOCATION -->
+  <div class="location-panel">
+    <div class="loc-icon">📍</div>
+    <div>
+      <div class="loc-name" id="locName">SIN UBICACIÓN</div>
+      <div class="loc-sub" id="locSub">Activá la localización para vincular datos</div>
+    </div>
+    <button class="loc-btn" onclick="requestLocation()">GEOLOC</button>
+  </div>
+
+  <div class="split-screen">
+
+    <!-- 1. PANEL BARRAS -->
+    <div class="bars-panel" id="barsPanel">
+      <div class="bars-panel-header">
+        <div class="bars-title">◈ VOLUMEN POR CANAL</div>
+        <button class="download-bars-btn" onclick="downloadBars()">⬇ IMAGEN</button>
+      </div>
+
+      <div class="hbar-row hbar-cell">
+        <div style="flex:0 0 90px;">
+          <div class="hbar-label">PEER · MOBILE</div>
+          <div class="hbar-sub">Red entre dispositivos móviles</div>
+        </div>
+        <div class="hbar-track"><div class="hbar-fill" id="hbarCell" style="width:0%"></div></div>
+        <div class="hbar-val" id="hvalCell">0</div>
+        <div class="hbar-delta delta-flat" id="hdeltaCell">—</div>
+      </div>
+      <div class="hbar-row hbar-wifi">
+        <div style="flex:0 0 90px;">
+          <div class="hbar-label">ISP · CARRIER</div>
+          <div class="hbar-sub">Proveedor de internet / telefonía</div>
+        </div>
+        <div class="hbar-track"><div class="hbar-fill" id="hbarWifi" style="width:0%"></div></div>
+        <div class="hbar-val" id="hvalWifi">0</div>
+        <div class="hbar-delta delta-flat" id="hdeltaWifi">—</div>
+      </div>
+      <div class="hbar-row hbar-iot">
+        <div style="flex:0 0 90px;">
+          <div class="hbar-label">IoT · AMBIENT</div>
+          <div class="hbar-sub">Sensores y dispositivos conectados</div>
+        </div>
+        <div class="hbar-track"><div class="hbar-fill" id="hbarIot" style="width:0%"></div></div>
+        <div class="hbar-val" id="hvalIot">0</div>
+        <div class="hbar-delta delta-flat" id="hdeltaIot">—</div>
+      </div>
+      <div class="hbar-row hbar-trf">
+        <div style="flex:0 0 90px;">
+          <div class="hbar-label">VIAL · TRÁNSITO</div>
+          <div class="hbar-sub">Datos de movilidad y transporte</div>
+        </div>
+        <div class="hbar-track"><div class="hbar-fill" id="hbarTrf" style="width:0%"></div></div>
+        <div class="hbar-val" id="hvalTrf">0</div>
+        <div class="hbar-delta delta-flat" id="hdeltaTrf">—</div>
+      </div>
+      <div class="hbar-row hbar-pub">
+        <div style="flex:0 0 90px;">
+          <div class="hbar-label">INFRA · PÚBLICA</div>
+          <div class="hbar-sub">Redes municipales y servicios</div>
+        </div>
+        <div class="hbar-track"><div class="hbar-fill" id="hbarPub" style="width:0%"></div></div>
+        <div class="hbar-val" id="hvalPub">0</div>
+        <div class="hbar-delta delta-flat" id="hdeltaPub">—</div>
+      </div>
+      <div class="hbar-row hbar-inf">
+        <div style="flex:0 0 90px;">
+          <div class="hbar-label">DISPO · INFORMAL</div>
+          <div class="hbar-sub">Dispositivos no registrados en redes formales</div>
+        </div>
+        <div class="hbar-track"><div class="hbar-fill" id="hbarInf" style="width:0%"></div></div>
+        <div class="hbar-val" id="hvalInf">0</div>
+        <div class="hbar-delta delta-flat" id="hdeltaInf">—</div>
+      </div>
+
+      <div class="total-row">
+        <div class="total-label">TOTAL dBm</div>
+        <div class="total-track"><div class="total-fill" id="totalFill" style="width:0%"></div></div>
+        <div class="total-val" id="totalVal">0</div>
+      </div>
+      <div class="silencio-row">
+        <div class="silencio-icon">🔇</div>
+        <div class="silencio-label">SILENCIO</div>
+        <div class="silencio-track"><div class="silencio-fill" id="silencioFill" style="width:0%"></div></div>
+        <div class="silencio-val" id="silencioVal">—</div>
+        <div class="silencio-pct" id="silencioPct">%</div>
+      </div>
+      <div class="enacom-row">
+        <div class="enacom-icon">🛰</div>
+        <div class="enacom-label">ENACOM<br>MÓVIL</div>
+        <div class="enacom-track"><div class="enacom-fill" id="enacomFill" style="width:52%"></div></div>
+        <div class="enacom-val" id="enacomVal">52%</div>
+        <div class="enacom-beta">BETA</div>
+      </div>
+      <button class="enacom-map-btn" onclick="abrirMapa()">
+        🗺 CARTOGRAFÍA CONECTIVIDAD REGIÓN · ENACOM
+      </button>
+    </div>
+
+    <!-- 2. CONTEXTO URBANO — chips compactos -->
+    <div class="contexto-panel">
+      <div class="contexto-title">◈ CONTEXTO URBANO</div>
+      <div class="contexto-grid">
+        <div class="ctx-chip" onclick="selCtx(this,'ESQUINA')" data-ctx="ESQUINA"><div class="ctx-icon">🔀</div><div class="ctx-label">ESQUINA</div></div>
+        <div class="ctx-chip" onclick="selCtx(this,'PLAZA')" data-ctx="PLAZA"><div class="ctx-icon">🌳</div><div class="ctx-label">PLAZA</div></div>
+        <div class="ctx-chip" onclick="selCtx(this,'SUBSUELO')" data-ctx="SUBSUELO"><div class="ctx-icon">🚇</div><div class="ctx-label">SUBSUELO</div></div>
+        <div class="ctx-chip" onclick="selCtx(this,'VIADUCTO')" data-ctx="VIADUCTO"><div class="ctx-icon">🌉</div><div class="ctx-label">VIADUCTO</div></div>
+        <div class="ctx-chip" onclick="selCtx(this,'EDIFICIO')" data-ctx="EDIFICIO"><div class="ctx-icon">🏢</div><div class="ctx-label">EDIFICIO</div></div>
+        <div class="ctx-chip" onclick="selCtx(this,'AVENIDA')" data-ctx="AVENIDA"><div class="ctx-icon">🛣</div><div class="ctx-label">AVENIDA</div></div>
+        <div class="ctx-chip" onclick="selCtx(this,'PARQUE')" data-ctx="PARQUE"><div class="ctx-icon">🌿</div><div class="ctx-label">PARQUE</div></div>
+        <div class="ctx-chip" onclick="selCtx(this,'VILLA')" data-ctx="VILLA"><div class="ctx-icon">🏘</div><div class="ctx-label">VILLA</div></div>
+        <div class="ctx-chip" onclick="selCtx(this,'OTRO')" data-ctx="OTRO"><div class="ctx-icon">📌</div><div class="ctx-label">OTRO</div></div>
+      </div>
+      <div class="ctx-actual" id="ctxActual">SIN CONTEXTO SELECCIONADO</div>
+    </div>
+
+    <!-- 3. FRANJA DE BRUMA — fina, firma visual -->
+    <div class="bruma-panel" id="brumaPanel">
+      <div class="bruma-header">
+        <div class="bruma-title">〰 BRUMA DE DATOS</div>
+        <div class="bruma-timer">PRÓX. CICLO: <span id="brumaCuentaAtras">15:00</span></div>
+      </div>
+      <canvas id="brumaCanvas" style="height:52px;"></canvas>
+      <div class="bruma-sub">Volumen total · curva de densidad en tiempo real</div>
+    </div>
+
+    <!-- 4. MAPA -->
+    <div class="map-panel" id="mapPanel">
+      <div class="map-header">
+        <div class="map-title">◈ MAPA GEOREF.</div>
+        <div class="map-actions">
+          <button id="mapToggleBtn" onclick="toggleMapMode()">🌍 MAPA REAL</button>
+          <button class="map-btn map-btn-gmaps" onclick="openGoogleMaps()">🗺 MAPS</button>
+          <button class="map-btn map-btn-dl" onclick="downloadMap()">⬇</button>
+        </div>
+      </div>
+      <canvas id="mapCanvas"></canvas>
+      <div id="leafletMap"></div>
+      <div class="map-coords" id="mapCoords">
+        <div class="coord-item"><span class="coord-label">LATITUD</span><span class="coord-val" id="coordLat">—</span></div>
+        <div class="coord-item"><span class="coord-label">LONGITUD</span><span class="coord-val" id="coordLon">—</span></div>
+        <div class="coord-item"><span class="coord-label">PRECISIÓN</span><span class="coord-val" id="coordAcc">—</span></div>
+        <div class="coord-item"><span class="coord-label">PUNTOS</span><span class="coord-val" id="geoPointCount">0</span></div>
+      </div>
+      <div class="map-legend">
+        <div class="leg-item"><div class="leg-dot" style="background:var(--cell);box-shadow:var(--glow-cell)"></div>PEER</div>
+        <div class="leg-item"><div class="leg-dot" style="background:var(--wifi);box-shadow:var(--glow-wifi)"></div>ISP</div>
+        <div class="leg-item"><div class="leg-dot" style="background:var(--iot);box-shadow:var(--glow-iot)"></div>IoT</div>
+        <div class="leg-item"><div class="leg-dot" style="background:var(--trf);box-shadow:var(--glow-trf)"></div>VIAL</div>
+        <div class="leg-item"><div class="leg-dot" style="background:var(--pub);box-shadow:var(--glow-pub)"></div>PÚBLICA</div>
+        <div class="leg-item"><div class="leg-dot" style="background:var(--inf);box-shadow:var(--glow-inf)"></div>INFORMAL</div>
+      </div>
+    </div>
+
+    <!-- 5. CAPAS TEMÁTICAS OSM -->
+    <div class="capas-panel" id="capasPanel">
+      <div class="capas-title">◈ CAPAS TERRITORIALES</div>
+      <div class="capas-grid">
+        <button class="capa-btn verde" id="capaVerde" onclick="toggleCapa('verde')"><div class="capa-dot"></div>🌿 VERDE</button>
+        <button class="capa-btn agua" id="capaAgua" onclick="toggleCapa('agua')"><div class="capa-dot"></div>💧 RÍOS Y CAUCES</button>
+        <button class="capa-btn via" id="capaVia" onclick="toggleCapa('via')"><div class="capa-dot"></div>🛣 VÍAS</button>
+        <button class="capa-btn trama" id="capaTrama" onclick="toggleCapa('trama')"><div class="capa-dot"></div>🏘 TRAMA URB.</button>
+        <button class="capa-btn instit" id="capaInstit" onclick="toggleCapa('instit')"><div class="capa-dot"></div>🏛 INSTITUCIONES</button>
+      </div>
+      <div class="capas-note">⚠ Capas visibles solo en MAPA REAL · datos OpenStreetMap</div>
+    </div>
+
+    <!-- 6. COMPARACIÓN TEMPORAL -->
+    <div class="compare-panel">
+      <div class="compare-title">◈ COMPARACIÓN TEMPORAL</div>
+      <div class="compare-tabs" id="compareTabs"></div>
+      <div class="compare-chart" id="compareChart">
+        <div class="compare-empty">GUARDÁ SESIONES PARA COMPARAR</div>
+      </div>
+      <button class="compare-save-btn" onclick="guardarSesion()">⊕ GUARDAR SESIÓN ACTUAL</button>
+    </div>
+
+  </div><!-- end split-screen -->
+
+  <!-- HISTORIAL -->
+  <div class="history">
+    <div class="hist-title">▸ HISTORIAL DEL CICLO</div>
+    <div class="hist-chart" id="histChart"></div>
+  </div>
+
+  <!-- TABLA GEO -->
+  <div class="geo-table-panel">
+    <div class="geo-table-header">
+      <div class="geo-table-title">▸ LOG DE POSICIONES</div>
+      <button class="export-csv-btn" onclick="exportCSV()">⬇ CSV</button>
+    </div>
+    <div class="geo-row header">
+      <span>HORA</span><span>COORD.</span>
+      <span style="text-align:center">📱</span>
+      <span style="text-align:center">🗼</span>
+      <span style="text-align:center">⚡</span>
+      <span style="text-align:center">🚦</span>
+      <span style="text-align:center">🏛</span>
+    </div>
+    <div id="geoTableBody">
+      <div style="font-size:8px;color:#1a3a52;padding:10px 0;text-align:center;letter-spacing:2px">SIN REGISTROS — ACTIVÁ GEOLOC</div>
+    </div>
+  </div>
+
+  <footer>
+    DATA LUMEN v7.0 · CICLO CADA 15 MIN · SOLO VOLUMEN — SIN CONTENIDO<br>
+    <span style="color:#0d2235">────────────────────────────────────</span><br>
+    <span class="footer-author">Desarrollada por Marta Algañaraz</span>
+  </footer>
+
+</div><!-- end app -->
+
+<script>
+// --- ESTADO ---
+const INTERVAL = 900; // 15 minutos (v7)
+const EMAIL_DESTINO = 'maralgaz@gmail.com';
+
+const state = {
+  master: true,
+  capturing: true,
+  channels: { cell:true, wifi:true, iot:true, trf:true, pub:true, inf:true },
+  values:   { cell:0, wifi:0, iot:0, trf:0, pub:0, inf:0 },
+  prevValues: { cell:0, wifi:0, iot:0, trf:0, pub:0, inf:0 }, // v7: para deltas
+  history: [],
+  brumaHistory: [],
+  cycle: 0,
+  countdown: INTERVAL,
+  brumaCountdown: INTERVAL,
+  location: null,
+  locationActive: false,
+  geoLog: [],
+  geoWatcher: null,
+  interval: null,
+  countdownInterval: null,
+  brumaInterval: null,
+  mapaVisible: true,
+  brumaVisible: true,
+  contextoActual: null, // v7
+  sesionesGuardadas: [], // v7: comparación temporal
+  sesionActivaIdx: 0,   // v7
+};
+
+// --- PERSISTENCIA (IndexedDB) ---
+let db = null;
+
+function initDB() {
+  const req = indexedDB.open('DataLumenDB_v7', 1);
+  req.onupgradeneeded = e => {
+    const d = e.target.result;
+    if(!d.objectStoreNames.contains('geoLog')) d.createObjectStore('geoLog', {keyPath:'id', autoIncrement:true});
+    if(!d.objectStoreNames.contains('config')) d.createObjectStore('config', {keyPath:'key'});
+    if(!d.objectStoreNames.contains('sesiones')) d.createObjectStore('sesiones', {keyPath:'id', autoIncrement:true});
+  };
+  req.onsuccess = e => {
+    db = e.target.result;
+    loadPersistedData();
+    loadSesiones();
+  };
+  req.onerror = () => console.warn('IndexedDB no disponible');
+}
+
+function saveGeoPoint(point) {
+  if(!db) return;
+  const tx = db.transaction('geoLog', 'readwrite');
+  tx.objectStore('geoLog').add(point);
+}
+
+function loadPersistedData() {
+  if(!db) return;
+  const tx = db.transaction('geoLog', 'readonly');
+  const req = tx.objectStore('geoLog').getAll();
+  req.onsuccess = e => {
+    const saved = e.target.result;
+    if(saved && saved.length > 0) {
+      state.geoLog = saved.slice(-50).map(p => ({
+        time: p.time, lat: p.lat, lon: p.lon, acc: p.acc,
+        cell: p.cell, wifi: p.wifi, iot: p.iot, trf: p.trf||0, pub: p.pub||0, inf: p.inf||0,
+        contexto: p.contexto || null
+      }));
+      document.getElementById('geoPointCount').textContent = state.geoLog.length;
+      renderGeoTable();
+      renderGeoMap();
+      showProactiveAlert('💾','DATOS RESTAURADOS',`${state.geoLog.length} puntos cargados desde sesión anterior`, false);
+    }
+  };
+}
+
+function clearPersistedData() {
+  if(!db) return;
+  const tx = db.transaction('geoLog', 'readwrite');
+  tx.objectStore('geoLog').clear();
+}
+
+// --- SESIONES TEMPORALES (NUEVO v7) ---
+function guardarSesion() {
+  const active = Object.keys(state.channels).filter(ch=>state.channels[ch]);
+  const total = active.length ? Math.round(active.reduce((s,ch)=>s+state.values[ch],0)/active.length) : 0;
+  if(total === 0){
+    showProactiveAlert('⚠️','SIN DATOS','No hay datos de señal para guardar esta sesión', false);
+    return;
+  }
+  const ahora = new Date();
+  const dias = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+  const label = dias[ahora.getDay()] + ' ' + ahora.toTimeString().slice(0,5);
+  const sesion = {
+    label,
+    fecha: ahora.toISOString(),
+    total,
+    cell: state.values.cell,
+    wifi: state.values.wifi,
+    iot: state.values.iot,
+    trf: state.values.trf,
+    pub: state.values.pub,
+    inf: state.values.inf||0,
+    contexto: state.contextoActual,
+    puntos: state.geoLog.length,
+  };
+  state.sesionesGuardadas.push(sesion);
+  if(state.sesionesGuardadas.length > 7) state.sesionesGuardadas.shift();
+  if(db){
+    const tx = db.transaction('sesiones','readwrite');
+    tx.objectStore('sesiones').add(sesion);
+  }
+  state.sesionActivaIdx = state.sesionesGuardadas.length - 1;
+  renderComparacion();
+  showProactiveAlert('✅','SESIÓN GUARDADA',`"${label}" guardada · total ${total} dBm`, false);
+}
+
+function loadSesiones(){
+  if(!db) return;
+  const tx = db.transaction('sesiones','readonly');
+  const req = tx.objectStore('sesiones').getAll();
+  req.onsuccess = e => {
+    const saved = e.target.result;
+    if(saved && saved.length>0){
+      state.sesionesGuardadas = saved.slice(-7);
+      renderComparacion();
+    }
+  };
+}
+
+function renderComparacion(){
+  const tabs = document.getElementById('compareTabs');
+  const chart = document.getElementById('compareChart');
+  const seses = state.sesionesGuardadas;
+  if(!seses.length){
+    tabs.innerHTML='';
+    chart.innerHTML='<div class="compare-empty">GUARDÁ SESIONES PARA COMPARAR</div>';
+    return;
+  }
+  // Tabs
+  tabs.innerHTML = seses.map((s,i)=>`
+    <button class="compare-tab${i===state.sesionActivaIdx?' active':''}" onclick="verSesion(${i})">${s.label}</button>
+  `).join('');
+  // Chart: barras por canal de la sesión activa
+  const s = seses[state.sesionActivaIdx];
+  const maxVal = Math.max(s.cell,s.wifi,s.iot,s.trf,s.pub,1);
+  const canales = [
+    {k:'cell',col:'var(--cell)',lbl:'PEER'},
+    {k:'wifi',col:'var(--wifi)',lbl:'ISP'},
+    {k:'iot', col:'var(--iot)', lbl:'IoT'},
+    {k:'trf', col:'var(--trf)', lbl:'VIAL'},
+    {k:'pub', col:'var(--pub)', lbl:'PÚB'},
+  ];
+  chart.innerHTML = canales.map(c=>{
+    const h = Math.max(4, Math.round(s[c.k]/maxVal*60));
+    return `<div class="cmp-bar-wrap">
+      <div class="cmp-val">${s[c.k]}</div>
+      <div class="cmp-bar" style="height:${h}px;background:${c.col};opacity:0.7;"></div>
+      <div class="cmp-label">${c.lbl}</div>
+    </div>`;
+  }).join('') + `
+    <div class="cmp-bar-wrap" style="border-left:1px solid #1a3a52;padding-left:4px;">
+      <div class="cmp-val" style="color:var(--acc)">${s.total}</div>
+      <div class="cmp-bar" style="height:${Math.max(4,Math.round(s.total/maxVal*60))}px;background:var(--acc);opacity:0.5;"></div>
+      <div class="cmp-label" style="color:var(--acc)">TOTAL</div>
+    </div>`;
+  if(s.contexto){
+    chart.innerHTML += `<div style="font-size:7px;color:var(--iot);letter-spacing:1px;padding:4px 0;width:100%">CTX: ${s.contexto}</div>`;
+  }
+}
+
+function verSesion(idx){
+  state.sesionActivaIdx = idx;
+  renderComparacion();
+}
+
+// --- CONTEXTO URBANO (NUEVO v7) ---
+function selCtx(el, ctx){
+  document.querySelectorAll('.ctx-chip').forEach(c=>c.classList.remove('selected'));
+  if(state.contextoActual === ctx){
+    state.contextoActual = null;
+    document.getElementById('ctxActual').innerHTML = 'SIN CONTEXTO SELECCIONADO';
+  } else {
+    el.classList.add('selected');
+    state.contextoActual = ctx;
+    document.getElementById('ctxActual').innerHTML = `CONTEXTO ACTIVO: <span>${ctx}</span> · se incluirá en el próximo registro`;
+  }
+}
+
+// --- SIMULACIÓN ---
+function simulateScan() {
+  if(!state.master) return;
+  const base = {
+    cell: {min:5,  max:85},
+    wifi: {min:15, max:95},
+    iot:  {min:2,  max:60},
+    trf:  {min:3,  max:75},
+    inf:  {min:1,  max:70},
+    pub:  {min:1,  max:55}
+  };
+  // Guardar valores anteriores para deltas
+  Object.keys(state.values).forEach(ch => {
+    state.prevValues[ch] = state.values[ch];
+  });
+
+  let total = 0;
+  Object.keys(base).forEach(ch => {
+    if(!state.channels[ch]){ state.values[ch]=0; return; }
+    const b = base[ch];
+    const prev = state.values[ch] || 25;
+    const delta = (Math.random()-0.45)*18;
+    state.values[ch] = Math.round(Math.max(b.min, Math.min(b.max, prev+delta)));
+    total += state.values[ch];
+  });
+  const active = Object.keys(state.channels).filter(ch=>state.channels[ch]);
+  const avg = active.length ? Math.round(total/active.length) : 0;
+  state.history.push(avg);
+  if(state.history.length > 12) state.history.shift();
+  state.cycle++;
+  updateUI();
+}
+
+// --- UI ---
+function updateUI() {
+  const max = {cell:85, wifi:95, iot:60, trf:75, pub:55, inf:70};
+  const ids  = {cell:'Cell', wifi:'Wifi', iot:'Iot', trf:'Trf', pub:'Pub', inf:'Inf'};
+
+  Object.keys(max).forEach(ch => {
+    const v = state.values[ch];
+    const pct = state.channels[ch] ? Math.round(v/max[ch]*100) : 0;
+    const C = ids[ch];
+    const bar = document.getElementById('hbar'+C);
+    const val = document.getElementById('hval'+C);
+    if(bar) bar.style.width = pct+'%';
+    if(val) val.textContent = state.channels[ch] ? v : '---';
+
+    // DELTA (NUEVO v7)
+    const deltaEl = document.getElementById('hdelta'+C);
+    if(deltaEl && state.cycle > 1){
+      const diff = state.values[ch] - state.prevValues[ch];
+      if(diff > 2){ deltaEl.textContent='▲'; deltaEl.className='hbar-delta delta-up'; }
+      else if(diff < -2){ deltaEl.textContent='▼'; deltaEl.className='hbar-delta delta-down'; }
+      else{ deltaEl.textContent='▬'; deltaEl.className='hbar-delta delta-flat'; }
+    }
+  });
+
+  const active = Object.keys(state.channels).filter(ch=>state.channels[ch]);
+  const totalVal = active.length ? Math.round(active.reduce((s,ch)=>s+state.values[ch],0)/active.length) : 0;
+  document.getElementById('totalVal').textContent = totalVal;
+  document.getElementById('totalFill').style.width = Math.round(totalVal/95*100)+'%';
+  document.getElementById('cycleCount').textContent = state.cycle;
+
+  const maxPosible = 95;
+  const silencioPct = active.length ? Math.max(0, Math.round((1 - totalVal/maxPosible)*100)) : 100;
+  const silencioFill = document.getElementById('silencioFill');
+  const silencioVal  = document.getElementById('silencioVal');
+  const silencioPctEl = document.getElementById('silencioPct');
+  if(silencioFill) silencioFill.style.width = silencioPct+'%';
+  if(silencioVal)  silencioVal.textContent  = silencioPct;
+  if(silencioPctEl) silencioPctEl.textContent = '%';
+
+  renderHistory();
+  checkSaturation();
+  renderBruma();
+}
+
+// --- HISTORIAL ---
+function renderHistory() {
+  const chart = document.getElementById('histChart');
+  chart.innerHTML = '';
+  const h = state.history;
+  if(!h.length){ chart.innerHTML='<div style="font-size:9px;color:#1a3a52;width:100%;text-align:center;padding-top:16px">SIN DATOS AÚN</div>'; return; }
+  const maxH = Math.max(...h, 1);
+  h.forEach((val,i)=>{
+    const wrap = document.createElement('div'); wrap.className='hist-bar-wrap';
+    const bar = document.createElement('div');
+    bar.className='hist-bar'+(i===h.length-1?' current':'');
+    bar.style.height = Math.round(val/maxH*44)+'px';
+    const label = document.createElement('div'); label.className='hist-label';
+    const minsAgo = (h.length-1-i)*15; // v7: 15 min
+    label.textContent = minsAgo===0 ? 'AHORA' : `-${minsAgo}m`;
+    wrap.appendChild(bar); wrap.appendChild(label);
+    chart.appendChild(wrap);
+  });
+}
+
+// --- CURVA DE BRUMA ---
+let brumaAnimFrame = null;
+let brumaPhase = 0;
+let brumaAnimRunning = false;
+
+function renderBruma() {
+  if(brumaAnimRunning) return;
+  brumaAnimRunning = true;
+  animateBrumaWave();
+}
+
+function animateBrumaWave() {
+  const canvas = document.getElementById('brumaCanvas');
+  if(!canvas || !state.brumaVisible) { brumaAnimRunning = false; return; }
+
+  const W = canvas.offsetWidth || 360;
+  const H = 52;
+  if(canvas.width !== W) canvas.width = W;
+  canvas.height = H;
+
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#050a12';
+  ctx.fillRect(0, 0, W, H);
+
+  const active = Object.keys(state.channels).filter(ch => state.channels[ch]);
+  const totalVal = active.length ? active.reduce((s, ch) => s + (state.values[ch] || 0), 0) / active.length : 0;
+  const maxPosible = 95;
+  const brumaPct = Math.min(totalVal / maxPosible, 1);
+  const silencioPct = 1 - brumaPct;
+  const centerY = H - (brumaPct * (H - 20)) - 10;
+
+  drawAnimWave(ctx, W, H, { centerY: centerY - 8, amplitude: 6 + silencioPct * 10, freq1: 0.018, freq2: 0.033, phase: brumaPhase * 0.6, color: '#8aaabb', opacity: 0.18 + silencioPct * 0.15, fillDown: false });
+  drawAnimWave(ctx, W, H, { centerY: centerY + 6, amplitude: 8 + brumaPct * 14, freq1: 0.022, freq2: 0.041, phase: brumaPhase, color: '#a855f7', opacity: 0.25 + brumaPct * 0.3, fillDown: true });
+  drawAnimWave(ctx, W, H, { centerY: centerY + 2, amplitude: 5 + brumaPct * 10, freq1: 0.015, freq2: 0.028, phase: brumaPhase * 1.3 + 1.2, color: '#00f5ff', opacity: 0.15 + brumaPct * 0.2, fillDown: true });
+
+  ctx.save();
+  ctx.globalAlpha = 0.5;
+  ctx.strokeStyle = '#ffe600';
+  ctx.lineWidth = 1;
+  ctx.shadowColor = '#ffe600';
+  ctx.shadowBlur = 6;
+  ctx.setLineDash([4, 6]);
+  ctx.beginPath();
+  for(let x = 0; x <= W; x += 3) {
+    const yLine = centerY + Math.sin(x * 0.025 + brumaPhase) * 3;
+    if(x === 0) ctx.moveTo(x, yLine); else ctx.lineTo(x, yLine);
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.save();
+  ctx.font = 'bold 8px Share Tech Mono';
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#a855f7';
+  ctx.globalAlpha = 0.8;
+  ctx.fillText('BRUMA ' + Math.round(brumaPct * 100) + '%', W - 6, centerY + 22);
+  ctx.fillStyle = '#8aaabb';
+  ctx.globalAlpha = 0.6;
+  ctx.fillText('SILENCIO ' + Math.round(silencioPct * 100) + '%', W - 6, centerY - 8);
+  ctx.restore();
+
+  brumaPhase += 0.008;
+  brumaAnimFrame = requestAnimationFrame(animateBrumaWave);
+}
+
+function drawAnimWave(ctx, W, H, opt) {
+  ctx.save();
+  ctx.globalAlpha = opt.opacity;
+  const grad = ctx.createLinearGradient(0, opt.centerY - opt.amplitude, 0, H);
+  grad.addColorStop(0, opt.color);
+  grad.addColorStop(1, 'transparent');
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  if(opt.fillDown) ctx.moveTo(0, H); else ctx.moveTo(0, 0);
+  for(let x = 0; x <= W; x += 2) {
+    const y = opt.centerY
+      + Math.sin(x * opt.freq1 + opt.phase) * opt.amplitude
+      + Math.sin(x * opt.freq2 + opt.phase * 1.7) * (opt.amplitude * 0.4);
+    ctx.lineTo(x, y);
+  }
+  if(opt.fillDown) { ctx.lineTo(W, H); ctx.lineTo(0, H); }
+  else             { ctx.lineTo(W, 0); ctx.lineTo(0, 0); }
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function recordBrumaSnapshot() {
+  const active = Object.keys(state.channels).filter(ch=>state.channels[ch]);
+  const total = active.length ? Math.round(active.reduce((s,ch)=>s+state.values[ch],0)/active.length) : 0;
+  const now = new Date();
+  state.brumaHistory.push({
+    time: now.toTimeString().slice(0,5), total,
+    cell: state.values.cell, wifi: state.values.wifi,
+    iot:  state.values.iot,  trf:  state.values.trf, pub: state.values.pub,
+  });
+  if(state.brumaHistory.length > 24) state.brumaHistory.shift();
+  renderBruma();
+}
+
+// --- SATURACIÓN ---
+const SAT_MAX   = {cell:85,wifi:95,iot:60,trf:75,pub:55,inf:70};
+const SAT_NAMES = {cell:'PEER·MOBILE',wifi:'ISP·CARRIER',iot:'IoT·AMBIENTE',trf:'VIAL·TRÁNSITO',pub:'INFRA·PÚBLICA',inf:'DISPO·INFORMAL'};
+const SAT_ICONS = {cell:'📱',wifi:'🗼',iot:'⚡',trf:'🚦',pub:'🏛️',inf:'📵'};
+const satActive = {cell:false,wifi:false,iot:false,trf:false,pub:false};
+
+function checkSaturation() {
+  Object.keys(SAT_MAX).forEach(ch=>{
+    const pct = state.values[ch]/SAT_MAX[ch]*100;
+    if(pct>=90 && !satActive[ch]){ satActive[ch]=true; showSatAlert(ch); }
+    else if(pct<75 && satActive[ch]){ satActive[ch]=false; dismissSatAlert(ch); }
+  });
+}
+function showSatAlert(ch) {
+  if(document.getElementById('sat-'+ch)) return;
+  const card = document.createElement('div');
+  card.className='sat-card'; card.id='sat-'+ch;
+  card.innerHTML=`<div class="sat-icon">${SAT_ICONS[ch]}</div>
+    <div class="sat-body">
+      <div class="sat-title">⚠ SATURACIÓN DETECTADA</div>
+      <div class="sat-msg">${SAT_NAMES[ch]} superó el umbral máximo</div>
+    </div>
+    <button class="sat-close" onclick="dismissSatAlert('${ch}')">OK</button>`;
+  document.getElementById('satContainer').appendChild(card);
+  if(navigator.vibrate) navigator.vibrate([200,100,200]);
+}
+function dismissSatAlert(ch) {
+  const c = document.getElementById('sat-'+ch); if(c) c.remove();
+}
+
+// --- ALERTAS PROACTIVAS ---
+let alertQueue = [];
+let alertShowing = false;
+
+function showProactiveAlert(icon, title, msg, urgent=false) {
+  alertQueue.push({icon, title, msg, urgent});
+  if(!alertShowing) processAlertQueue();
+}
+
+function processAlertQueue() {
+  if(!alertQueue.length){ alertShowing=false; return; }
+  alertShowing = true;
+  const {icon, title, msg, urgent} = alertQueue.shift();
+  const existing = document.getElementById('proactiveAlert');
+  if(existing) existing.remove();
+  const el = document.createElement('div');
+  el.id = 'proactiveAlert';
+  el.className = 'proactive-alert' + (urgent?' urgent':'');
+  el.innerHTML = `
+    <div class="pa-icon">${icon}</div>
+    <div class="pa-body">
+      <div class="pa-title">${title}</div>
+      <div class="pa-msg">${msg}</div>
+    </div>
+    <button class="pa-close" onclick="dismissProactiveAlert()">OK</button>`;
+  document.body.appendChild(el);
+  if(navigator.vibrate && urgent) navigator.vibrate([100,50,100,50,100]);
+  setTimeout(()=>{ if(el.parentElement){ el.remove(); alertShowing=false; setTimeout(processAlertQueue,500); } }, 10000);
+}
+
+function dismissProactiveAlert() {
+  const el = document.getElementById('proactiveAlert');
+  if(el) el.remove();
+  alertShowing = false;
+  setTimeout(processAlertQueue, 500);
+}
+
+function checkProactiveAlerts() {
+  if(!state.locationActive) {
+    showProactiveAlert('📍','⚠ GPS APAGADO','Activá la geolocalización para registrar tu recorrido correctamente', true);
+  }
+  if(!state.capturing) {
+    showProactiveAlert('⏺','⚠ CAPTURA DETENIDA','La captura de datos está pausada. Tocá CAPTURA para reanudar', true);
+  }
+  if(state.geoLog.length === 0 && state.locationActive) {
+    showProactiveAlert('📊','SIN REGISTROS','Aún no hay puntos geográficos. Movete para generar registros', false);
+  }
+  if(state.geoLog.length > 0 && state.cycle % 4 === 0) {
+    showProactiveAlert('📸','RECORDATORIO','Capturá una imagen de los indicadores para tu registro de campo', false);
+  }
+}
+
+// --- TOGGLES ---
+function toggleMaster() {
+  state.master = !state.master;
+  const btn = document.getElementById('masterBtn');
+  if(state.master){
+    btn.classList.remove('off');
+    document.getElementById('masterLabel').textContent='ON';
+    document.getElementById('statusVal').textContent='ACTIVO';
+    startCycle(); simulateScan();
+  } else {
+    btn.classList.add('off');
+    document.getElementById('masterLabel').textContent='OFF';
+    document.getElementById('statusVal').textContent='DETENIDO';
+    stopCycle();
+    Object.keys(state.values).forEach(ch=>state.values[ch]=0);
+    updateUI();
+  }
+}
+
+function toggleCapture() {
+  state.capturing = !state.capturing;
+  const btn = document.getElementById('captureBtn');
+  const label = document.getElementById('captureBtnLabel');
+  const ctrlBtn = document.getElementById('ctrlCaptura');
+  const ctrlDot = ctrlBtn ? ctrlBtn.querySelector('.ctrl-dot') : null;
+
+  if(state.capturing){
+    btn.className='capture-btn capturing';
+    label.textContent='■ DETENER CAPTURA';
+    if(ctrlBtn){ ctrlBtn.style.borderColor='#00ff88'; ctrlBtn.style.background='#001a0f'; }
+    if(ctrlDot){ ctrlDot.style.background='#00ff88'; ctrlDot.style.boxShadow='0 0 4px #00ff88'; }
+    ctrlBtn && (ctrlBtn.querySelector('.cb-label').style.color='#00ff88');
+    if(!state.master) toggleMaster();
+    else { simulateScan(); startCycle(); }
+  } else {
+    btn.className='capture-btn stopped';
+    label.textContent='▶ INICIAR CAPTURA';
+    if(ctrlBtn){ ctrlBtn.style.borderColor='#1a3a52'; ctrlBtn.style.background='#050d14'; }
+    if(ctrlDot){ ctrlDot.style.background='#1a3a52'; ctrlDot.style.boxShadow='none'; }
+    ctrlBtn && (ctrlBtn.querySelector('.cb-label').style.color='#456');
+    stopCycle();
+    Object.keys(state.values).forEach(ch=>state.values[ch]=0);
+    updateUI();
+    showProactiveAlert('⏹','CAPTURA DETENIDA','Los datos ya no se están registrando. Tocá INICIAR para reanudar.', false);
+  }
+}
+
+function toggleControlMapa() {
+  state.mapaVisible = !state.mapaVisible;
+  const panel = document.getElementById('mapPanel');
+  const btn = document.getElementById('ctrlMapa');
+  if(panel) panel.style.display = state.mapaVisible ? 'block' : 'none';
+  if(btn){
+    if(state.mapaVisible){
+      btn.classList.add('active');
+      btn.querySelector('.ctrl-dot').style.background='#00ff88';
+      btn.querySelector('.ctrl-dot').style.boxShadow='0 0 4px #00ff88';
+    } else {
+      btn.classList.remove('active');
+      btn.querySelector('.ctrl-dot').style.background='#1a3a52';
+      btn.querySelector('.ctrl-dot').style.boxShadow='none';
+    }
+  }
+}
+
+function toggleBruma() {
+  state.brumaVisible = !state.brumaVisible;
+  const panel = document.getElementById('brumaPanel');
+  const btn = document.getElementById('ctrlBruma');
+  if(panel) panel.style.display = state.brumaVisible ? 'block' : 'none';
+  if(btn){
+    if(state.brumaVisible){
+      btn.style.borderColor='#a855f7'; btn.style.background='#0e0520';
+      btn.querySelector('.ctrl-dot').style.background='#a855f7';
+      btn.querySelector('.ctrl-dot').style.boxShadow='0 0 4px #a855f7';
+      btn.querySelector('.cb-label').style.color='#a855f7';
+    } else {
+      btn.style.borderColor='#1a3a52'; btn.style.background='#050d14';
+      btn.querySelector('.ctrl-dot').style.background='#1a3a52';
+      btn.querySelector('.ctrl-dot').style.boxShadow='none';
+      btn.querySelector('.cb-label').style.color='#456';
+    }
+  }
+}
+
+// --- CICLO ---
+function startCycle() {
+  stopCycle();
+  state.countdown = INTERVAL;
+  state.brumaCountdown = INTERVAL;
+  state.interval = setInterval(()=>{
+    simulateScan();
+    recordBrumaSnapshot();
+    checkProactiveAlerts();
+  }, INTERVAL*1000);
+  state.countdownInterval = setInterval(()=>{
+    if(!state.capturing) return;
+    state.countdown = Math.max(0, state.countdown-1);
+    state.brumaCountdown = Math.max(0, state.brumaCountdown-1);
+    const pct = Math.round((1 - state.countdown/INTERVAL)*100);
+    document.getElementById('refreshPct').textContent = pct+'%';
+    const mm = String(Math.floor(state.countdown/60)).padStart(2,'0');
+    const ss = String(state.countdown%60).padStart(2,'0');
+    document.getElementById('countdown').textContent = mm+':'+ss;
+    document.getElementById('brumaCuentaAtras').textContent = mm+':'+ss;
+    if(state.countdown===0){ state.countdown=INTERVAL; state.brumaCountdown=INTERVAL; }
+  },1000);
+}
+
+function stopCycle() {
+  if(state.interval) clearInterval(state.interval);
+  if(state.countdownInterval) clearInterval(state.countdownInterval);
+  if(state.brumaInterval) clearInterval(state.brumaInterval);
+  state.interval = state.countdownInterval = state.brumaInterval = null;
+}
+
+// --- GPS ---
+function activarGPSyMaps() {
+  const btn = document.getElementById('gpsEmergencyBtn');
+  if(state.locationActive){
+    requestLocation();
+    return;
+  }
+  btn.style.transform='scale(0.95)';
+  setTimeout(()=>btn.style.transform='',200);
+  requestLocation();
+}
+
+function abrirMapsDirecto(){
+  const url = state.location
+    ? `https://www.google.com/maps?q=${state.location.lat},${state.location.lon}`
+    : 'https://www.google.com/maps';
+  window.open(url,'_blank');
+}
+
+function openGoogleMaps(){
+  if(state.location)
+    window.open(`https://www.google.com/maps?q=${state.location.lat},${state.location.lon}`,'_blank');
+  else
+    window.open('https://www.google.com/maps','_blank');
+}
+
+function requestLocation() {
+  if(!navigator.geolocation){
+    document.getElementById('locName').textContent='NO DISPONIBLE'; return;
+  }
+  if(state.locationActive){
+    navigator.geolocation.clearWatch(state.geoWatcher);
+    state.locationActive=false; state.location=null;
+    document.getElementById('locName').textContent='SIN UBICACIÓN';
+    document.getElementById('locSub').textContent='Activá la localización para vincular datos';
+    document.getElementById('coordLat').textContent='—';
+    document.getElementById('coordLon').textContent='—';
+    document.getElementById('coordAcc').textContent='—';
+    updateGpsUI(false);
+    return;
+  }
+  document.getElementById('locName').textContent='LOCALIZANDO...';
+  state.locationActive=true;
+  state.geoWatcher = navigator.geolocation.watchPosition(pos=>{
+    const lat=pos.coords.latitude, lon=pos.coords.longitude, acc=Math.round(pos.coords.accuracy);
+    state.location={lat,lon,acc};
+    document.getElementById('locName').textContent=`${lat.toFixed(5)}°  ${lon.toFixed(5)}°`;
+    document.getElementById('locSub').textContent=`Precisión ±${acc}m · vinculado`;
+    document.getElementById('coordLat').textContent=lat.toFixed(6)+'°';
+    document.getElementById('coordLon').textContent=lon.toFixed(6)+'°';
+    document.getElementById('coordAcc').textContent='±'+acc+'m';
+    updateGpsUI(true);
+    recordGeoPoint(lat,lon,acc);
+  }, err=>{
+    document.getElementById('locName').textContent='ACCESO DENEGADO';
+    document.getElementById('locSub').textContent='Permiso de ubicación requerido';
+    state.locationActive=false;
+    updateGpsUI(false);
+    showProactiveAlert('🚫','GPS DENEGADO','Andá a Ajustes → Permisos → Ubicación para activarlo', true);
+  },{enableHighAccuracy:true, maximumAge:10000, timeout:15000});
+}
+
+function updateGpsUI(active){
+  const btn = document.getElementById('ctrlGps');
+  const emergBtn = document.getElementById('gpsEmergencyBtn');
+  const sideTitle = document.getElementById('gpsSideTitle');
+  const sideSub = document.getElementById('gpsSideSub');
+  const btnIcon = document.getElementById('gpsBtnIcon');
+  const btnLabel = document.getElementById('gpsBtnLabel');
+  const mapsBtn = document.getElementById('gpsMapsBtn');
+
+  if(active){
+    if(btn){ btn.classList.add('active'); btn.classList.remove('warning'); btn.querySelector('.ctrl-dot').style.background='#00ff88'; btn.querySelector('.ctrl-dot').style.boxShadow='0 0 4px #00ff88'; btn.querySelector('.cb-label').style.color='#00ff88'; }
+    if(emergBtn) emergBtn.classList.add('active');
+    if(sideTitle){ sideTitle.textContent='✓ GPS ACTIVO'; sideTitle.classList.add('active'); }
+    if(sideSub) sideSub.textContent='Ubicación vinculada · registrando posición';
+    if(btnIcon) btnIcon.textContent='✓';
+    if(btnLabel) btnLabel.innerHTML='GPS<br>ACTIVO';
+    if(mapsBtn) mapsBtn.classList.add('visible');
+  } else {
+    if(btn){ btn.classList.remove('active'); btn.classList.add('warning'); }
+    if(emergBtn) emergBtn.classList.remove('active');
+    if(sideTitle){ sideTitle.textContent='⚠ GPS REQUERIDO'; sideTitle.classList.remove('active'); }
+    if(sideSub) sideSub.textContent='Tocá el botón rojo para activar ubicación';
+    if(btnIcon) btnIcon.textContent='📍';
+    if(btnLabel) btnLabel.innerHTML='ACTIVAR<br>GPS';
+    if(mapsBtn) mapsBtn.classList.remove('visible');
+  }
+}
+
+// alias para compatibilidad
+function updateGpsCtrlBtn(active){ updateGpsUI(active); }
+
+function recordGeoPoint(lat,lon,acc){
+  const now=new Date();
+  const point = {
+    time:now.toTimeString().slice(0,5), lat, lon, acc,
+    cell:state.values.cell, wifi:state.values.wifi,
+    iot:state.values.iot, trf:state.values.trf, pub:state.values.pub, inf:state.values.inf||0,
+    contexto: state.contextoActual // v7
+  };
+  state.geoLog.push(point);
+  if(state.geoLog.length>50) state.geoLog.shift();
+  document.getElementById('geoPointCount').textContent=state.geoLog.length;
+  saveGeoPoint(point);
+  renderGeoTable();
+  renderGeoMap();
+  updateEnacomBar(lat, lon);
+}
+
+// --- ENACOM ---
+function updateEnacomBar(lat, lon) {
+  const partidos = [
+    {lat:-34.665,lng:-58.365,c:92},{lat:-34.706,lng:-58.393,c:89},
+    {lat:-34.760,lng:-58.400,c:87},{lat:-34.473,lng:-58.527,c:91},
+    {lat:-34.526,lng:-58.476,c:93},{lat:-34.721,lng:-58.254,c:84},
+    {lat:-34.606,lng:-58.562,c:82},{lat:-34.573,lng:-58.537,c:85},
+    {lat:-34.826,lng:-58.397,c:68},{lat:-34.764,lng:-58.209,c:65},
+    {lat:-34.838,lng:-58.459,c:62},{lat:-34.810,lng:-58.274,c:58},
+    {lat:-34.653,lng:-58.619,c:78},{lat:-34.588,lng:-58.639,c:74},
+    {lat:-34.660,lng:-58.673,c:72},{lat:-34.497,lng:-58.700,c:67},
+    {lat:-34.541,lng:-58.713,c:69},{lat:-34.770,lng:-58.600,c:70},
+    {lat:-34.426,lng:-58.580,c:71},{lat:-34.443,lng:-58.559,c:73},
+    {lat:-34.638,lng:-58.790,c:48},{lat:-34.678,lng:-58.728,c:45},
+    {lat:-34.778,lng:-58.830,c:38},{lat:-34.610,lng:-58.956,c:35},
+    {lat:-34.570,lng:-59.115,c:42},{lat:-34.459,lng:-58.912,c:52},
+    {lat:-34.348,lng:-58.795,c:49},{lat:-34.099,lng:-59.033,c:40},
+    {lat:-34.163,lng:-58.956,c:44},{lat:-34.519,lng:-58.772,c:46},
+    {lat:-34.856,lng:-58.524,c:55},{lat:-35.052,lng:-58.757,c:30},
+  ];
+  let minDist = Infinity, closest = partidos[0];
+  partidos.forEach(p => {
+    const d = Math.sqrt(Math.pow(p.lat-lat,2)+Math.pow(p.lng-lon,2));
+    if(d < minDist){ minDist=d; closest=p; }
+  });
+  const val = closest.c;
+  const fill = document.getElementById('enacomFill');
+  const valEl = document.getElementById('enacomVal');
+  if(fill) fill.style.width = val+'%';
+  if(valEl) valEl.textContent = val+'%';
+}
+
+// --- TABLA GEO ---
+function renderGeoTable(){
+  const body=document.getElementById('geoTableBody');
+  if(!state.geoLog.length){
+    body.innerHTML='<div style="font-size:8px;color:#1a3a52;padding:10px 0;text-align:center;letter-spacing:2px">SIN REGISTROS — ACTIVÁ GEOLOC</div>';
+    return;
+  }
+  const rows=[...state.geoLog].reverse().slice(0,10);
+  body.innerHTML=rows.map((r,i)=>`
+    <div class="geo-row data" style="opacity:${i===0?1:Math.max(0.2,1-i*0.08)}">
+      <span class="geo-ts">${r.time}</span>
+      <span class="geo-coords">${r.lat.toFixed(4)}°<br>${r.lon.toFixed(4)}°</span>
+      <span class="geo-val-c">${r.cell}</span>
+      <span class="geo-val-w">${r.wifi}</span>
+      <span class="geo-val-i">${r.iot}</span>
+      <span class="geo-val-t">${r.trf||0}</span>
+      <span class="geo-val-p">${r.pub||0}</span>
+    </div>`).join('');
+}
+
+// --- MAPA (canvas) ---
+let mapMode = 'canvas';
+let leafletMap = null;
+
+function renderGeoMap(){
+  if(mapMode === 'leaflet'){ updateLeafletMarkers(); return; }
+  const canvas = document.getElementById('mapCanvas');
+  if(!canvas) return;
+  const W = canvas.offsetWidth || 360;
+  const H = 180;
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle='#050a0f'; ctx.fillRect(0,0,W,H);
+  if(!state.geoLog.length){
+    ctx.fillStyle='#1a3a52'; ctx.font='10px Share Tech Mono'; ctx.textAlign='center';
+    ctx.fillText('SIN DATOS · ACTIVÁ GPS', W/2, H/2); return;
+  }
+  const lats = state.geoLog.map(p=>p.lat), lons = state.geoLog.map(p=>p.lon);
+  const minLat=Math.min(...lats)-0.001, maxLat=Math.max(...lats)+0.001;
+  const minLon=Math.min(...lons)-0.001, maxLon=Math.max(...lons)+0.001;
+  const pad=20;
+  const scaleX = lon => pad + (lon-minLon)/(maxLon-minLon)*(W-pad*2);
+  const scaleY = lat => H-pad - (lat-minLat)/(maxLat-minLat)*(H-pad*2);
+  const cols = {cell:'#00f5ff',wifi:'#00ff88',iot:'#ff6b35',trf:'#a855f7',pub:'#f59e0b',inf:'#ff2d9b'};
+  const chList = ['cell','wifi','iot','trf','pub','inf'];
+  state.geoLog.forEach(p=>{
+    const x=scaleX(p.lon), y=scaleY(p.lat);
+    chList.forEach(ch=>{
+      const v=p[ch]||0; if(!v) return;
+      const r=4+v/20;
+      ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2);
+      ctx.fillStyle=cols[ch]+'44'; ctx.fill();
+    });
+    ctx.beginPath(); ctx.arc(x,y,4,0,Math.PI*2);
+    ctx.fillStyle='#00f5ff'; ctx.fill();
+  });
+}
+
+// --- CAPAS TEMÁTICAS OSM (Overpass API - vectores reales) ---
+const osmLayers = { verde:null, agua:null, via:null, trama:null, instit:null };
+const capaState = { verde:false, agua:false, via:false, trama:false, instit:false };
+
+const CAPA_CONFIG = {
+  verde: {
+    color:'#4ade80', fillColor:'#4ade80', fillOpacity:0.35, weight:1.5,
+    query: (b) => `[out:json][timeout:25];
+(
+  way["leisure"="park"](${b});
+  way["leisure"="garden"](${b});
+  way["leisure"="nature_reserve"](${b});
+  way["landuse"="grass"](${b});
+  way["landuse"="forest"](${b});
+  way["landuse"="meadow"](${b});
+  way["natural"="wood"](${b});
+  way["natural"="grassland"](${b});
+);
+out body geom;`
+  },
+  agua: {
+    color:'#38bdf8', fillColor:'#38bdf8', fillOpacity:0.4, weight:2,
+    query: (b) => `[out:json][timeout:25];
+(
+  way["waterway"="river"](${b});
+  way["waterway"="stream"](${b});
+  way["waterway"="canal"](${b});
+  way["waterway"="drain"](${b});
+  way["waterway"="ditch"](${b});
+  way["natural"="water"](${b});
+  way["landuse"="reservoir"](${b});
+  relation["natural"="water"](${b});
+);
+out body geom;`
+  },
+  via: {
+    color:'#fb923c', fillColor:'#fb923c', fillOpacity:0.1, weight:2,
+    query: (b) => `[out:json][timeout:25];
+(
+  way["highway"="primary"](${b});
+  way["highway"="secondary"](${b});
+  way["highway"="tertiary"](${b});
+  way["highway"="residential"](${b});
+  way["highway"="trunk"](${b});
+  way["highway"="motorway"](${b});
+);
+out body geom;`
+  },
+  trama: {
+    color:'#c084fc', fillColor:'#c084fc', fillOpacity:0.25, weight:1,
+    query: (b) => `[out:json][timeout:25];
+(
+  way["building"](${b});
+);
+out body geom;`
+  },
+  instit: {
+    color:'#facc15', fillColor:'#facc15', fillOpacity:0.45, weight:1.5,
+    query: (b) => `[out:json][timeout:25];
+(
+  node["amenity"="school"](${b});
+  node["amenity"="university"](${b});
+  node["amenity"="college"](${b});
+  node["amenity"="hospital"](${b});
+  node["amenity"="clinic"](${b});
+  node["amenity"="police"](${b});
+  node["amenity"="post_office"](${b});
+  node["amenity"="courthouse"](${b});
+  node["amenity"="fire_station"](${b});
+  node["amenity"="library"](${b});
+  node["amenity"="townhall"](${b});
+  way["amenity"="school"](${b});
+  way["amenity"="university"](${b});
+  way["amenity"="hospital"](${b});
+  way["amenity"="police"](${b});
+  way["amenity"="post_office"](${b});
+  way["amenity"="townhall"](${b});
+  way["amenity"="library"](${b});
+);
+out body geom;`
+  }
+};
+
+async function loadCapaOverpass(tipo) {
+  const bounds = leafletMap.getBounds();
+  const b = `${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()}`;
+  const cfg = CAPA_CONFIG[tipo];
+  const query = cfg.query(b);
+
+  const btn = document.getElementById('capa'+tipo.charAt(0).toUpperCase()+tipo.slice(1));
+  if(btn) btn.textContent = '⏳ cargando...';
+
+  try {
+    const resp = await fetch('https://overpass-api.de/api/interpreter', {
+      method:'POST',
+      body: 'data='+encodeURIComponent(query)
+    });
+    const data = await resp.json();
+
+    const features = [];
+    data.elements.forEach(el => {
+      if(el.type === 'node' && el.lat) {
+        features.push({ type:'Feature', geometry:{ type:'Point', coordinates:[el.lon, el.lat] }, properties: el.tags||{} });
+      } else if((el.type === 'way' || el.type === 'relation') && el.geometry) {
+        const coords = el.geometry.map(p => [p.lon, p.lat]);
+        if(coords.length > 2) {
+          features.push({ type:'Feature', geometry:{ type:'Polygon', coordinates:[coords] }, properties: el.tags||{} });
+        } else {
+          features.push({ type:'Feature', geometry:{ type:'LineString', coordinates:coords }, properties: el.tags||{} });
+        }
+      }
+    });
+
+    const geojson = { type:'FeatureCollection', features };
+    osmLayers[tipo] = L.geoJSON(geojson, {
+      style: { color:cfg.color, fillColor:cfg.fillColor, fillOpacity:cfg.fillOpacity, weight:cfg.weight },
+      pointToLayer: (feature, latlng) => L.circleMarker(latlng, {
+        radius:6, fillColor:cfg.fillColor, color:cfg.color,
+        weight:1.5, opacity:1, fillOpacity:0.8
+      }),
+      onEachFeature: (feature, layer) => {
+        const p = feature.properties;
+        const nombre = p.name || p['name:es'] || p.amenity || p.leisure || p.landuse || p.waterway || p.highway || tipo;
+        layer.bindPopup(`<span style="font-family:monospace;font-size:12px;color:#111">${nombre}</span>`);
+      }
+    }).addTo(leafletMap);
+
+    capaState[tipo] = true;
+    if(btn) {
+      const labels = { verde:'🌿 VERDE', agua:'💧 RÍOS Y CAUCES', via:'🛣 VÍAS', trama:'🏘 TRAMA URB.', instit:'🏛 INSTITUCIONES' };
+      btn.innerHTML = `<div class="capa-dot"></div>${labels[tipo]}`;
+      btn.classList.add('on');
+    }
+  } catch(e) {
+    if(btn) {
+      const labels = { verde:'🌿 VERDE', agua:'💧 RÍOS Y CAUCES', via:'🛣 VÍAS', trama:'🏘 TRAMA URB.', instit:'🏛 INSTITUCIONES' };
+      btn.innerHTML = `<div class="capa-dot"></div>${labels[tipo]}`;
+    }
+    showProactiveAlert('⚠','CAPA NO DISPONIBLE','Sin conexión o timeout OSM. Intentá de nuevo.', false);
+  }
+}
+
+function toggleCapa(tipo) {
+  if(mapMode !== 'leaflet'){
+    toggleMapMode();
+    setTimeout(()=>toggleCapa(tipo), 700);
+    return;
+  }
+  const capName = tipo.charAt(0).toUpperCase()+tipo.slice(1);
+  const btn = document.getElementById('capa'+capName);
+  if(capaState[tipo]){
+    if(osmLayers[tipo]){ leafletMap.removeLayer(osmLayers[tipo]); osmLayers[tipo]=null; }
+    capaState[tipo]=false;
+    if(btn) btn.classList.remove('on');
+  } else {
+    loadCapaOverpass(tipo);
+  }
+}
+
+function toggleMapMode(){
+  const capas = document.getElementById('capasPanel');
+  if(mapMode==='canvas'){
+    mapMode='leaflet';
+    document.getElementById('mapCanvas').style.display='none';
+    const lm = document.getElementById('leafletMap');
+    lm.style.display='block';
+    if(!leafletMap){
+      leafletMap = L.map('leafletMap',{zoomControl:false,attributionControl:false}).setView(
+        state.location ? [state.location.lat, state.location.lon] : [-34.62, -58.44], 14);
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19,subdomains:'abcd'}).addTo(leafletMap);
+    }
+    updateLeafletMarkers();
+    document.getElementById('mapToggleBtn').textContent='🗺 CANVAS';
+    if(capas) capas.classList.add('visible');
+  } else {
+    mapMode='canvas';
+    document.getElementById('leafletMap').style.display='none';
+    document.getElementById('mapCanvas').style.display='block';
+    document.getElementById('mapToggleBtn').textContent='🌍 MAPA REAL';
+    if(capas) capas.classList.remove('visible');
+    renderGeoMap();
+  }
+}
+
+function updateLeafletMarkers(){
+  if(!leafletMap) return;
+  state.geoLog.forEach(p=>{
+    L.circleMarker([p.lat,p.lon],{radius:5,color:'#00f5ff',fillColor:'#00f5ff',fillOpacity:0.7,weight:1}).addTo(leafletMap);
+  });
+  if(state.location) leafletMap.setView([state.location.lat, state.location.lon]);
+}
+
+function downloadMap(){
+  const canvas = document.getElementById('mapCanvas');
+  const a = document.createElement('a');
+  a.href = canvas.toDataURL('image/png');
+  a.download = `DataLumen_Mapa_${new Date().toISOString().slice(0,10)}.png`;
+  a.click();
+}
+
+function downloadBars(){
+  const panel = document.getElementById('barsPanel');
+  showProactiveAlert('📸','CAPTURÁ LA PANTALLA','Usá el botón de captura de pantalla de tu dispositivo para guardar la imagen', false);
+}
+
+// --- EXPORT CSV ---
+function exportCSV(){
+  if(!state.geoLog.length){ showProactiveAlert('⚠️','SIN DATOS','No hay registros para exportar', false); return; }
+  const BOM = '\uFEFF';
+  const header = 'HORA,LAT,LON,PRECISION,PEER_MOBILE,ISP_CARRIER,IoT_AMBIENTAL,VIAL_TRANSITO,INFRA_PUBLICA,DISPO_INFORMAL,CONTEXTO\n';
+  const rows = state.geoLog.map(r=>
+    `${r.time},${r.lat},${r.lon},${r.acc},${r.cell},${r.wifi},${r.iot},${r.trf||0},${r.pub||0},${r.inf||0},${r.contexto||''}`
+  ).join('\n');
+  const blob = new Blob([BOM+header+rows],{type:'text/csv;charset=utf-8;'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `DataLumen_v7_${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  showProactiveAlert('📊','CSV EXPORTADO',`${state.geoLog.length} registros con contexto urbano`, false);
+}
+
+// --- PDF ---
+function generatePDF(){
+  const now = new Date();
+  const active = Object.keys(state.channels).filter(ch=>state.channels[ch]);
+  const totalVal = active.length ? Math.round(active.reduce((s,ch)=>s+state.values[ch],0)/active.length) : 0;
+  const silencioPct = Math.max(0,Math.round((1-totalVal/95)*100));
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>DATA LUMEN v7 · REPORTE</title>
+<style>
+  body{background:#050a0f;color:#a0cce0;font-family:'Courier New',monospace;padding:20px;max-width:600px;margin:0 auto}
+  h1{color:#00f5ff;letter-spacing:6px;font-size:18px;border-bottom:1px solid #0d2235;padding-bottom:10px}
+  h2{color:#ffe600;letter-spacing:3px;font-size:12px;margin:20px 0 8px}
+  .row{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #0a1a28;font-size:11px}
+  .val{color:#00f5ff;font-weight:bold}
+  .wi{color:#00ff88}.io{color:#ff6b35}.tr{color:#a855f7}.pu{color:#f59e0b}
+  .ctx{color:#ff6b35;font-size:10px;letter-spacing:2px}
+  .footer{margin-top:30px;font-size:8px;color:#1a3a52;letter-spacing:2px;text-align:center;border-top:1px solid #0d2235;padding-top:10px}
+</style></head><body>
+<h1>DATA LUMEN · REPORTE DE CAMPO</h1>
+<h2>METADATOS</h2>
+<div class="row"><span>FECHA</span><span class="val">${now.toLocaleDateString('es-AR')}</span></div>
+<div class="row"><span>HORA</span><span class="val">${now.toTimeString().slice(0,8)}</span></div>
+<div class="row"><span>CICLOS REGISTRADOS</span><span class="val">${state.cycle}</span></div>
+<div class="row"><span>PUNTOS GPS</span><span class="val">${state.geoLog.length}</span></div>
+${state.contextoActual ? `<div class="row"><span>CONTEXTO URBANO</span><span class="ctx">${state.contextoActual}</span></div>` : ''}
+${state.location ? `<div class="row"><span>ÚLTIMA POSICIÓN</span><span class="val">${state.location.lat.toFixed(5)}° ${state.location.lon.toFixed(5)}°</span></div>` : ''}
+
+<h2>VOLUMEN POR CANAL</h2>
+<div class="row"><span>PEER · MOBILE</span><span class="val">${state.values.cell} dBm</span></div>
+<div class="row"><span>ISP · CARRIER</span><span class="wi">${state.values.wifi} dBm</span></div>
+<div class="row"><span>IoT · AMBIENTAL</span><span class="io">${state.values.iot} dBm</span></div>
+<div class="row"><span>VIAL · TRÁNSITO</span><span class="tr">${state.values.trf} dBm</span></div>
+<div class="row"><span>INFRA · PÚBLICA</span><span class="pu">${state.values.pub} dBm</span></div>
+<div class="row"><span>DISPO · INFORMAL</span><span style="color:#ff2d9b">${state.values.inf||0} dBm</span></div>
+
+<h2>ÍNDICES</h2>
+<div class="row"><span>BRUMA DE DATOS TOTAL</span><span class="val">${totalVal} dBm</span></div>
+<div class="row"><span>SILENCIO DIGITAL</span><span class="val">${silencioPct}%</span></div>
+${state.sesionesGuardadas.length ? `
+<h2>SESIONES COMPARADAS</h2>
+${state.sesionesGuardadas.map(s=>`<div class="row"><span>${s.label}${s.contexto?' · '+s.contexto:''}</span><span class="val">${s.total} dBm</span></div>`).join('')}
+` : ''}
+
+<div class="footer">DATA LUMEN v7.0 · SOLO VOLUMEN · SIN CONTENIDO<br>Desarrollada por Marta Algañaraz · ${now.getFullYear()}</div>
+</body></html>`;
+
+  const b64 = btoa(unescape(encodeURIComponent(html)));
+  const w = window.open('','_blank');
+  if(w){ w.document.write(html); w.document.close(); }
+}
+
+// --- MAPA ENACOM ---
+function abrirMapa() {
+  const b64 = 'PCFET0NUWVBFIGh0bWw+CjxodG1sIGxhbmc9ImVzIj4KPGhlYWQ+CjxtZXRhIGNoYXJzZXQ9IlVURi04Ij4KPG1ldGEgbmFtZT0idmlld3BvcnQiIGNvbnRlbnQ9IndpZHRoPWRldmljZS13aWR0aCwgaW5pdGlhbC1zY2FsZT0xLjAsIG1heGltdW0tc2NhbGU9MS4wIj4KPHRpdGxlPkRBVEEgTFVNRU4gw7cgTWFwYSBDb25lY3RpdmlkYWQ8L3RpdGxlPgo8bGluayBocmVmPSJodHRwczovL2ZvbnRzLmdvb2dsZWFwaXMuY29tL2NzczI/ZmFtaWx5PVNoYXJlK1RlY2grTW9ubyZmYW1pbHk9UmFqZGhhbmk6d2dodEA3MDAmZGlzcGxheT1zd2FwIiByZWw9InN0eWxlc2hlZXQiPgo8bGluayByZWw9InN0eWxlc2hlZXQiIGhyZWY9Imh0dHBzOi8vY2RuanMuY2xvdWRmbGFyZS5jb20vYWpheC9saWJzL2xlYWZsZXQvMS45LjQvbGVhZmxldC5taW4uY3NzIi8+CjxzY3JpcHQgc3JjPSJodHRwczovL2NkbmpzLmNsb3VkZmxhcmUuY29tL2FqYXgvbGlicy9sZWFmbGV0LzEuOS40L2xlYWZsZXQubWluLmpzIj48L3NjcmlwdD4KPHN0eWxlPgogICogeyBtYXJnaW46MDsgcGFkZGluZzowOyBib3gtc2l6aW5nOmJvcmRlci1ib3g7IH0KICBib2R5IHsKICAgIGJhY2tncm91bmQ6ICMwODBDMTQ7CiAgICBjb2xvcjogI0UwRjBGRjsKICAgIGZvbnQtZmFtaWx5OiAnU2hhcmUgVGVjaCBNb25vJywgbW9ub3NwYWNlOwogICAgaGVpZ2h0OiAxMDB2aDsKICAgIGRpc3BsYXk6IGZsZXg7CiAgICBmbGV4LWRpcmVjdGlvbjogY29sdW1uOwogICAgb3ZlcmZsb3c6IGhpZGRlbjsKICB9CiAgaGVhZGVyIHsKICAgIGJhY2tncm91bmQ6ICMwRDE0MjA7CiAgICBib3JkZXItYm90dG9tOiAycHggc29saWQgIzAwRDRENDsKICAgIHBhZGRpbmc6IDhweCAxNnB4OwogICAgZGlzcGxheTogZmxleDsKICAgIGFsaWduLWl0ZW1zOiBjZW50ZXI7CiAgICBqdXN0aWZ5LWNvbnRlbnQ6IHNwYWNlLWJldHdlZW47CiAgICBmbGV4LXNocmluazogMDsKICAgIHotaW5kZXg6IDEwMDA7CiAgfQogIC5sb2dvIHsgZm9udC1mYW1pbHk6ICdSYWpkaGFuaScsIHNhbnMtc2VyaWY7IGZvbnQtc2l6ZTogMThweDsgZm9udC13ZWlnaHQ6IDcwMDsgY29sb3I6ICMwMEQ0RDQ7IGxldHRlci1zcGFjaW5nOiAzcHg7IH0KICAuaGVhZGVyLXN1YiB7IGZvbnQtc2l6ZTogMTBweDsgY29sb3I6ICM0QTZBOEE7IGxldHRlci1zcGFjaW5nOiAycHg7IG1hcmdpbi10b3A6IDFweDsgfQogIC5iYWRnZXMgeyBkaXNwbGF5OiBmbGV4OyBnYXA6IDhweDsgfQogIC5iYWRnZSB7IGZvbnQtc2l6ZTogOXB4OyBsZXR0ZXItc3BhY2luZzogMXB4OyBwYWRkaW5nOiAzcHggOHB4OyBib3JkZXItcmFkaXVzOiAycHg7IGJvcmRlcjogMXB4IHNvbGlkICMwMEQ0RDQ7IGNvbG9yOiAjMDBENEQ0OyBiYWNrZ3JvdW5kOiByZ2JhKDAsMjEyLDIxMiwwLjA4KTsgfQogIC5iYWRnZS53YXJuIHsgYm9yZGVyLWNvbG9yOiAjRkY2QjM1OyBjb2xvcjogI0ZGNkIzNTsgYmFja2dyb3VuZDogcmdiYSgyNTUsMTA3LDUzLDAuMDgpOyBhbmltYXRpb246IGJsaW5rIDJzIGluZmluaXRlOyB9CiAgQGtleWZyYW1lcyBibGluayB7IDAlLDEwMCV7b3BhY2l0eToxfSA1MCV7b3BhY2l0eTowLjU1fSB9CiAgLmJvZHkgeyBkaXNwbGF5OiBmbGV4OyBmbGV4OiAxOyBvdmVyZmxvdzogaGlkZGVuOyB9CiAgI21hcCB7IGZsZXg6IDE7IHotaW5kZXg6IDE7IH0KICAucGFuZWwgeyB3aWR0aDogMTgwcHg7IGJhY2tncm91bmQ6ICMwRDE0MjA7IGJvcmRlci1sZWZ0OiAxcHggc29saWQgIzFBMkEzQTsgZGlzcGxheTogZmxleDsgZmxleC1kaXJlY3Rpb246IGNvbHVtbjsgZmxleC1zaHJpbms6IDA7IG92ZXJmbG93LXk6IGF1dG87IHotaW5kZXg6IDEwMDsgcGFkZGluZzogMTJweCAxMHB4OyBnYXA6IDE0cHg7IH0KICAucGFuZWwtdGl0bGUgeyBmb250LWZhbWlseTogJ1JhamRoYW5pJywgc2Fucy1zZXJpZjsgZm9udC1zaXplOiAxMHB4OyBjb2xvcjogIzAwRDRENDsgbGV0dGVyLXNwYWNpbmc6IDNweDsgbWFyZ2luLWJvdHRvbTogNnB4OyB9CiAgLmhlYXQtYmFyIHsgaGVpZ2h0OiAxNHB4OyBib3JkZXItcmFkaXVzOiAycHg7IGJhY2tncm91bmQ6IGxpbmVhci1ncmFkaWVudCh0byByaWdodCwgIzBBM0E4QSwgIzFBNkFDQSwgIzAwRDRENSwgI0ZGREQwMCwgI0ZGNjYwMCwgI0NDMDAwMCk7IGJvcmRlcjogMXB4IHNvbGlkICMxQTJBM0E7IG1hcmdpbi1ib3R0b206IDRweDsgfQogIC5zY2FsZS1sYWJlbHMgeyBkaXNwbGF5OiBmbGV4OyBqdXN0aWZ5LWNvbnRlbnQ6IHNwYWNlLWJldHdlZW47IGZvbnQtc2l6ZTogOHB4OyBjb2xvcjogIzRBNkE4QTsgfQogIC5jb3Jkb24tcm93IHsgZGlzcGxheTogZmxleDsgYWxpZ24taXRlbXM6IGNlbnRlcjsgZ2FwOiA2cHg7IGZvbnQtc2l6ZTogMTBweDsgcGFkZGluZzogM3B4IDA7IGJvcmRlci1ib3R0b206IDFweCBzb2xpZCAjMTExQzI4OyB9CiAgLmNvcmRvbi1kb3QgeyB3aWR0aDogOXB4OyBoZWlnaHQ6IDlweDsgYm9yZGVyLXJhZGl1czogNTAlOyBmbGV4LXNocmluazogMDsgfQogIC5wYXJ0aWRvLXJvdyB7IGRpc3BsYXk6IGZsZXg7IGFsaWduLWl0ZW1zOiBjZW50ZXI7IGdhcDogNnB4OyBmb250LXNpemU6IDlweDsgcGFkZGluZzogM3B4IDA7IGJvcmRlci1ib3R0b206IDFweCBzb2xpZCAjMEYxODIwOyBjdXJzb3I6IHBvaW50ZXI7IH0KICAucGFydGlkby1yb3c6aG92ZXIgeyBiYWNrZ3JvdW5kOiByZ2JhKDAsMjEyLDIxMiwwLjA1KTsgfQogIC5wLWRvdCB7IHdpZHRoOiA3cHg7IGhlaWdodDogN3B4OyBib3JkZXItcmFkaXVzOiA1MCU7IGZsZXgtc2hyaW5rOiAwOyB9CiAgLnAtbmFtZSB7IGZsZXg6IDE7IGNvbG9yOiAjQjBDOEUwOyBvdmVyZmxvdzogaGlkZGVuOyB0ZXh0LW92ZXJmbG93OiBlbGxpcHNpczsgd2hpdGUtc3BhY2U6IG5vd3JhcDsgfQogIC5wLXZhbCB7IGNvbG9yOiAjMDBENEQ0OyBmb250LXNpemU6IDlweDsgfQogIC5zb3VyY2UgeyBmb250LXNpemU6IDhweDsgY29sb3I6ICMyQTRBNkE7IGxpbmUtaGVpZ2h0OiAxLjY7IGJvcmRlci10b3A6IDFweCBzb2xpZCAjMUEyQTNBOyBwYWRkaW5nLXRvcDogMTBweDsgbWFyZ2luLXRvcDogYXV0bzsgfQogIC5zb3VyY2Ugc3BhbiB7IGNvbG9yOiAjRkY2QjM1OyB9CiAgLmxlYWZsZXQtdG9vbHRpcCB7IGJhY2tncm91bmQ6ICMwRDE0MjAgIWltcG9ydGFudDsgYm9yZGVyOiAxcHggc29saWQgIzAwRDRENCAhaW1wb3J0YW50OyBjb2xvcjogI0UwRjBGRiAhaW1wb3J0YW50OyBmb250LWZhbWlseTogJ1NoYXJlIFRlY2ggTW9ubycsIG1vbm9zcGFjZSAhaW1wb3J0YW50OyBmb250LXNpemU6IDExcHggIWltcG9ydGFudDsgYm9yZGVyLXJhZGl1czogMnB4ICFpbXBvcnRhbnQ7IHBhZGRpbmc6IDhweCAxMnB4ICFpbXBvcnRhbnQ7IGJveC1zaGFkb3c6IDAgMCAxNnB4IHJnYmEoMCwyMTIsMjEyLDAuMjUpICFpbXBvcnRhbnQ7IH0KICAuem9vbS1jdHJsIHsgcG9zaXRpb246IGFic29sdXRlOyBib3R0b206IDI0cHg7IHJpZ2h0OiAyMDBweDsgei1pbmRleDogNTAwOyBkaXNwbGF5OiBmbGV4OyBmbGV4LWRpcmVjdGlvbjogY29sdW1uOyBnYXA6IDRweDsgfQogIC56LWJ0biB7IGJhY2tncm91bmQ6ICMwRDE0MjA7IGJvcmRlcjogMXB4IHNvbGlkICMxQTJBM0E7IGNvbG9yOiAjMDBENEQ0OyBmb250LXNpemU6IDE4cHg7IHdpZHRoOiAzNHB4OyBoZWlnaHQ6IDM0cHg7IGN1cnNvcjogcG9pbnRlcjsgYm9yZGVyLXJhZGl1czogMnB4OyBkaXNwbGF5OiBmbGV4OyBhbGlnbi1pdGVtczogY2VudGVyOyBqdXN0aWZ5LWNvbnRlbnQ6IGNlbnRlcjsgdHJhbnNpdGlvbjogYWxsIDAuMTVzOyB9CiAgLmVuYWNvbS1ub3RlIHsgcG9zaXRpb246IGFic29sdXRlOyBib3R0b206IDE0cHg7IGxlZnQ6IDEycHg7IHotaW5kZXg6IDUwMDsgYmFja2dyb3VuZDogcmdiYSg4LDEyLDIwLDAuODUpOyBib3JkZXItbGVmdDogM3B4IHNvbGlkICNGRjZCMzU7IHBhZGRpbmc6IDZweCAxMHB4OyBmb250LXNpemU6IDlweDsgY29sb3I6ICNGRjZCMzU7IGxpbmUtaGVpZ2h0OiAxLjU7IH0KICAubGVhZmxldC1jb250YWluZXIgeyBiYWNrZ3JvdW5kOiAjMDgwQzE0ICFpbXBvcnRhbnQ7IH0KICAubGVhZmxldC1jb250cm9sLXpvb20geyBkaXNwbGF5OiBub25lOyB9CiAgLmxlYWZsZXQtY29udHJvbC1hdHRyaWJ1dGlvbiB7IGRpc3BsYXk6IG5vbmU7IH0KPC9zdHlsZT4KPC9oZWFkPgo8Ym9keT4KPGhlYWRlcj4KICA8ZGl2PgogICAgPGRpdiBjbGFzcz0ibG9nbyI+REFUQSBMVU1FTiDCtyBDT05FQ1RJVklEQUQgTcOTVklMPC9kaXY+CiAgICA8ZGl2IGNsYXNzPSJoZWFkZXItc3ViIj5DT05VUkJBTk8gQk9OQUVSRU5TRSDCtyBIQVNUQSAzwrogQ09SRMOTTiDCtyBSRUdJw5NOIFNVUEVSSU9SPC9kaXY+CiAgPC9kaXY+CiAgPGRpdiBjbGFzcz0iYmFkZ2VzIj4KICAgIDxkaXYgY2xhc3M9ImJhZGdlIj5SRUYuIFNJTVVMQURBPC9kaXY+CiAgICA8ZGl2IGNsYXNzPSJiYWRnZSB3YXJuIj7imqAgRU5BQ09NIEJFVEE8L2Rpdj4KICA8L2Rpdj4KPC9oZWFkZXI+CjxkaXYgY2xhc3M9ImJvZHkiPgogIDxkaXYgaWQ9Im1hcCIgc3R5bGU9InBvc2l0aW9uOnJlbGF0aXZlOyI+CiAgICA8ZGl2IGNsYXNzPSJ6b29tLWN0cmwiPgogICAgICA8YnV0dG9uIGNsYXNzPSJ6LWJ0biIgb25jbGljaz0ibWFwLnpvb21JbigpIj4rPC9idXR0b24+CiAgICAgIDxidXR0b24gY2xhc3M9InotYnRuIiBvbmNsaWNrPSJtYXAuem9vbU91dCgpIj7iiJI8L2J1dHRvbj4KICAgICAgPGJ1dHRvbiBjbGFzcz0iei1idG4iIHN0eWxlPSJmb250LXNpemU6MTNweDsiIHRpdGxlPSJDZW50cmFyIiBvbmNsaWNrPSJtYXAuc2V0VmlldyhbLTM0LjYsLTU4Ljc4XSwxMCkiPuKMljwvYnV0dG9uPgogICAgPC9kaXY+CiAgICA8ZGl2IGNsYXNzPSJlbmFjb20tbm90ZSI+4pqgIEVOQUNPTSDigJQgUG9ydGFsIGVuIHZlcnNpw7NuIGJldGEuPGJyPkRBVEEgTFVNRU4gY3VicmUgZXN0ZSB2YWPDrW8gY29uIG1lZGljacOzbiBkaXJlY3RhIGVuIHRlcnJpdG9yaW8uPC9kaXY+CiAgPC9kaXY+CiAgPGRpdiBjbGFzcz0icGFuZWwiPgogICAgPGRpdj4KICAgICAgPGRpdiBjbGFzcz0icGFuZWwtdGl0bGUiPkVTQ0FMQTM8L2Rpdj4KICAgICAgPGRpdiBjbGFzcz0iaGVhdC1iYXIiPjwvZGl2PgogICAgICA8ZGl2IGNsYXNzPSJzY2FsZS1sYWJlbHMiPjxzcGFuPkJBSkE8L3NwYW4+PHNwYW4+QVRUQTM8L3NwYW4+PC9kaXY+CiAgICA8L2Rpdj4KICAgIDxkaXY+CiAgICAgIDxkaXYgY2xhc3M9InBhbmVsLXRpdGxlIj5DT1JET05FUzwvZGl2PgogICAgICA8ZGl2IGNsYXNzPSJjb3Jkb24tcm93Ij48ZGl2IGNsYXNzPSJjb3Jkb24tZG90IiBzdHlsZT0iYmFja2dyb3VuZDojQ0MwMDAwOyI+PC9kaXY+PHNwYW4+McKwIEFMVEE8L3NwYW4+PC9kaXY+CiAgICAgIDxkaXYgY2xhc3M9ImNvcmRvbi1yb3ciPjxkaXYgY2xhc3M9ImNvcmRvbi1kb3QiIHN0eWxlPSJiYWNrZ3JvdW5kOiNGRkFBMDA7Ij48L2Rpdj48c3Bhbj4ywrAgTUVESUE8L3NwYW4+PC9kaXY+CiAgICAgIDxkaXYgY2xhc3M9ImNvcmRvbi1yb3ciPjxkaXYgY2xhc3M9ImNvcmRvbi1kb3QiIHN0eWxlPSJiYWNrZ3JvdW5kOiMxQTZBQ0E7Ij48L2Rpdj48c3Bhbj4zwrAgQkFKQTwvc3Bhbj48L2Rpdj4KICAgIDwvZGl2PgogICAgPGRpdj4KICAgICAgPGRpdiBjbGFzcz0icGFuZWwtdGl0bGUiPlBBUlRJRE9TPC9kaXY+CiAgICAgIDxkaXYgaWQ9Imxpc3RhIj48L2Rpdj4KICAgIDwvZGl2PgogICAgPGRpdiBjbGFzcz0ic291cmNlIj5GVUVOVEU6IDxzcGFuPlNJTVVMQURPPC9zcGFuPjxicj5SZWYuIEVOQUNPTSBubyBkaXNwb25pYmxlLjxicj5NYXJ0YSBBbGdhw7FhcmF6PGJyPkRhdGEgTHVtZW4gdjcuMCDCtyAyMDI2PC9kaXY+CiAgPC9kaXY+CjwvZGl2Pgo8c2NyaXB0Pgpjb25zdCBwYXJ0aWRvcyA9IFsKICB7IG46IkF2ZWxsYW5lZGEiLCBsYXQ6LTM0LjY2NSwgbG5nOi01OC4zNjUsIGM6OTIsIGs6MSB9LAogIHsgbjoiTGFuw7pzIiwgbGF0Oi0zNC43MDYsIGxuZzotNTguMzkzLCBjOjg5LCBrOjEgfSwKICB7IG46IkxvbWFzIGRlIFphbW9yYSIsIGxhdDotMzQuNzYwLCBsbmc6LTU4LjQwMCwgYzo4NywgazoxIH0sCiAgeyBuOiJTYW4gSXNpZHJvIiwgbGF0Oi0zNC40NzMsIGxuZzotNTguNTI3LCBjOjkxLCBrOjEgfSwKICB7IG46IlZpY2VudGUgTMOzcGV6IiwgbGF0Oi0zNC41MjYsIGxuZzotNTguNDc2LCBjOjkzLCBrOjEgfSwKICB7IG46IlF1aWxtZXMiLCBsYXQ6LTM0LjcyMSwgbG5nOi01OC4yNTQsIGM6ODQsIGs6MSB9LAogIHsgbjoiVHJlcyBkZSBGZWJyZXJvIiwgbGF0Oi0zNC42MDYsIGxuZzotNTguNTYyLCBjOjgyLCBrOjEgfSwKICB7IG46IlNhbiBNYXJ0w61uIiwgbGF0Oi0zNC41NzMsIGxuZzotNTguNTM3LCBjOjg1LCBrOjEgfSwKICB7IG46IkFsbWlyYW50ZSBCcm93biIsIGxhdDotMzQuODI2LCBsbmc6LTU4LjM5NywgYzo2OCwgazoyIH0sCiAgeyBuOiJCZXJhemF0ZWd1aSIsIGxhdDotMzQuNzY0LCBsbmc6LTU4LjIwOSwgYzo2NSwgazoyIH0sCiAgeyBuOiJFc3RlYmFuIEVjaGV2ZXJyw61hIiwgbGF0Oi0zNC44MzgsIGxuZzotNTguNDU5LCBjOjYyLCBrOjIgfSwKICB7IG46IkZsb3JlbmNpbyBWYXJlbGEiLCBsYXQ6LTM0LjgxMCwgbG5nOi01OC4yNzQsIGM6NTgsIGs6MiB9LAogIHsgbjoiTW9yw7NuIiwgbGF0Oi0zNC42NTMsIGxuZzotNTguNjE5LCBjOjc4LCBrOjIgfSwKICB7IG46Ikh1cmxpbmdoYW0iLCBsYXQ6LTM0LjU4OCwgbG5nOi01OC42MzksIGM6NzQsIGs6MiB9LAogIHsgbjoiSXR1emFpbmfDMyIsIGxhdDotMzQuNjYwLCBsbmc6LTU4LjY3MywgYzo3MiwgazoyIH0sCiAgeyBuOiJNYWx2aW5hcyBBcmdlbnRpbmFzIiwgbGF0Oi0zNC40OTcsIGxuZzotNTguNzAwLCBjOjY3LCBrOjIgfSwKICB7IG46IlNhbiBNaWd1ZWwiLCBsYXQ6LTM0LjU0MSwgbG5nOi01OC43MTMsIGM6NjksIGs6MiB9LAogIHsgbjoiTGEgTWF0YW56YSIsIGxhdDotMzQuNzcwLCBsbmc6LTU4LjYwMCwgYzo3MCwgazoyIH0sCiAgeyBuOiJUaWdyZSIsIGxhdDotMzQuNDI2LCBsbmc6LTU4LjU4MCwgYzo3MSwgazoyIH0sCiAgeyBuOiJTYW4gRmVybmFuZG8iLCBsYXQ6LTM0LjQ0MywgbG5nOi01OC41NTksIGM6NzMsIGs6MiB9LAogIHsgbjoiTW9yZW5vIiwgbGF0Oi0zNC42MzgsIGxuZzotNTguNzkwLCBjOjQ4LCBrOjMgfSwKICB7IG46Ik1lcmxvIiwgbGF0Oi0zNC42NzgsIGxuZzotNTguNzI4LCBjOjQ1LCBrOjMgfSwKICB7IG46Ik1hcmNvcyBQYXoiLCBsYXQ6LTM0Ljc3OCwgbG5nOi01OC44MzAsIGM6MzgsIGs6MyB9LAogIHsgbjoiR3JhbC4gUm9kcsOtZ3VleiIsIGxhdDotMzQuNjEwLCBsbmc6LTU4Ljk1NiwgYzozNSwgazozIH0sCiAgeyBuOiJMdWrDoW4iLCBsYXQ6LTM0LjU3MCwgbG5nOi01OS4xMTUsIGM6NDIsIGs6MyB9LAogIHsgbjoiUGlsYXIiLCBsYXQ6LTM0LjQ1OSwgbG5nOi01OC45MTIsIGM6NTIsIGs6MyB9LAogIHsgbjoiRXNjb2JhciIsIGxhdDotMzQuMzQ4LCBsbmc6LTU4Ljc5NSwgYzo0OSwgazozIH0sCiAgeyBuOiJaw6FyYXRlIiwgbGF0Oi0zNC4wOTksIGxuZzotNTkuMDMzLCBjOjQwLCBrOjMgfSwKICB7IG46IkNhbXBhbmEiLCBsYXQ6LTM0LjE2MywgbG5nOi01OC45NTYsIGM6NDQsIGs6MyB9LAogIHsgbjoiSm9zw6kgQy4gUGF6IiwgbGF0Oi0zNC41MTksIGxuZzotNTguNzcyLCBjOjQ2LCBrOjMgfSwKICB7IG46IkV6ZWl6YSIsIGxhdDotMzQuODU2LCBsbmc6LTU4LjUyNCwgYzo1NSwgazozIH0sCiAgeyBuOiJDYcOxdWVsYXMiLCBsYXQ6LTM1LjA1MiwgbG5nOi01OC43NTcsIGM6MzAsIGs6MyB9LApdOwpmdW5jdGlvbiBnZXRDb2xvcih2KSB7CiAgaWYgKHY+PTg4KSByZXR1cm4gJyNDQzAwMDAnOwogIGlmICh2Pj03OCkgcmV0dXJuICcjRUU0NDAwJzsKICBpZiAodj49NjgpIHJldHVybiAnI0ZGODgwMCc7CiAgaWYgKHY+PTU4KSByZXR1cm4gJyNGRkREMDAnOwogIGlmICh2Pj00OCkgcmV0dXJuICcjMDBENEQ0JzsKICBpZiAodj49MzgpIHJldHVybiAnIzFBNkFDQSc7CiAgcmV0dXJuICcjMEEzQThBJzsKfQpjb25zdCBtYXAgPSBMLm1hcCgnbWFwJywgeyBjZW50ZXI6IFstMzQuNjAsIC01OC43OF0sIHpvb206IDEwLCB6b29tQ29udHJvbDogZmFsc2UsIGF0dHJpYnV0aW9uQ29udHJvbDogZmFsc2UgfSk7CkwudGlsZUxheWVyKCdodHRwczovL3tzfS5iYXNlbWFwcy5jYXJ0b2Nkbi5jb20vZGFya19hbGwve3p9L3t4fS97eX17cn0ucG5nJywgeyBtYXhab29tOiAxOSwgc3ViZG9tYWluczogJ2FiY2QnIH0pLmFkZFRvKG1hcCk7CnBhcnRpZG9zLmZvckVhY2gocCA9PiB7CiAgY29uc3QgY29sID0gZ2V0Q29sb3IocC5jKTsKICBMLmNpcmNsZShbcC5sYXQsIHAubG5nXSwgeyByYWRpdXM6IDUwMDAgKyAocC5jIC8gMTAwKSAqIDkwMDAsIGZpbGxDb2xvcjogY29sLCBmaWxsT3BhY2l0eTogMC4zOCwgY29sb3I6IGNvbCwgd2VpZ2h0OiAxLjUsIG9wYWNpdHk6IDAuOCB9KQogIC5iaW5kVG9vbHRpcChgPGIgc3R5bGU9ImNvbG9yOiMwMEQ0RDQ7bGV0dGVyLXNwYWNpbmc6MnB4OyI+JHtwLm4udG9VcHBlckNhc2UoKX08L2I+PGJyPjxzcGFuIHN0eWxlPSJjb2xvcjojODg4OyI+Q09SRMOTTiAke3Aua30gwrcgQ09OVVJCQU5PPC9zcGFuPjxicj48c3BhbiBzdHlsZT0iY29sb3I6Izg4ODsiPkNPTkVDVElWSURBRDogPC9zcGFuPjxiIHN0eWxlPSJjb2xvcjoke2NvbH07Zm9udC1zaXplOjE0cHg7Ij4ke3AuY30lPC9iPjxicj48c3BhbiBzdHlsZT0iY29sb3I6I0ZGNkIzNTtmb250LXNpemU6OXB4OyI+4pqgIERhdG8gc2ltdWxhZG8gwrcgRU5BQ09NIG5vIGRpc3BvbmlibGU8L3NwYW4+YCwgeyBkaXJlY3Rpb246J3RvcCcsIG9mZnNldDpbMCwtOF0gfSkKICAuYWRkVG8obWFwKTsKfSk7CmNvbnN0IGxpc3RhID0gZG9jdW1lbnQuZ2V0RWxlbWVudEJ5SWQoJ2xpc3RhJyk7ClsuLi5wYXJ0aWRvc10uc29ydCgoYSxiKT0+Yi5jLWEuYykuZm9yRWFjaChwID0+IHsKICBjb25zdCBkID0gZG9jdW1lbnQuY3JlYXRlRWxlbWVudCgnZGl2Jyk7CiAgZC5jbGFzc05hbWUgPSAncGFydGlkby1yb3cnOwogIGQuaW5uZXJIVE1MID0gYDxkaXYgY2xhc3M9InAtZG90IiBzdHlsZT0iYmFja2dyb3VuZDoke2dldENvbG9yKHAuYyl9OyI+PC9kaXY+PHNwYW4gY2xhc3M9InAtbmFtZSI+JHtwLm59PC9zcGFuPjxzcGFuIGNsYXNzPSJwLXZhbCI+JHtwLmN9JTwvc3Bhbj5gOwogIGQub25jbGljayA9ICgpID0+IG1hcC5zZXRWaWV3KFtwLmxhdCwgcC5sbmddLCAxMik7CiAgbGlzdGEuYXBwZW5kQ2hpbGQoZCk7Cn0pOwo8L3NjcmlwdD4KPC9ib2R5Pgo8L2h0bWw+Cg==';
+  const html = decodeURIComponent(escape(atob(b64)));
+  const w = window.open('','_blank');
+  if(w){ w.document.write(html); w.document.close(); }
+}
+
+// --- INIT ---
+initDB();
+simulateScan();
+startCycle();
+</script>
+</body>
+</html>
